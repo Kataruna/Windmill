@@ -211,7 +211,13 @@ internal sealed class Controller : IDisposable
     bool OnClick(bool down)
     {
         // Swallow the release only if we swallowed the press, so no app is left with a stuck button.
-        if (!down) { bool ours = _clickSwallowed; _clickSwallowed = false; return ours; }
+        if (!down)
+        {
+            bool ours = _clickSwallowed;
+            _clickSwallowed = false;
+            if (_state != State.Active) _ui.BeginInvoke(ReleaseMouse); // the press we swallowed has now been released
+            return ours;
+        }
         if (_state != State.Active) return false;
         if (_mode == Mode.Arrange) _ui.BeginInvoke(TogglePick);
         else if (Toggle) _ui.BeginInvoke(Commit); // click snaps to the highlighted zone, or closes if none
@@ -262,6 +268,7 @@ internal sealed class Controller : IDisposable
         _state = State.Active;
         _shortcutReleased = !_held.Overlaps(_triggerVks); // already true when a toggle tap opened it
         Update();
+        _hook.MouseEnabled = true;
         _pollTimer.Start();
         MaskModifiers();
     }
@@ -318,10 +325,17 @@ internal sealed class Controller : IDisposable
     {
         _pollTimer.Stop();
         _state = State.Idle;
+        ReleaseMouse();
         Block(); // holding the trigger after a snap must not reopen the menu
         _captures?.Cancel();
         _captures = null;
         _overlay.Dismiss(snapped);
+    }
+
+    /// <summary>Drops the mouse hook, unless it still has to swallow the release of a click it swallowed.</summary>
+    void ReleaseMouse()
+    {
+        if (_state != State.Active && !_clickSwallowed) _hook.MouseEnabled = false;
     }
 
     void CycleLayout(int step)

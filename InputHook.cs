@@ -3,7 +3,10 @@ using System.Runtime.InteropServices;
 
 namespace Windmill;
 
-/// <summary>Global low-level keyboard and mouse-wheel hooks. Callbacks must return quickly or Windows drops the hook.</summary>
+/// <summary>
+/// Global low-level keyboard hook, plus a mouse hook only while it's needed (see <see cref="MouseEnabled"/>).
+/// Callbacks must return quickly or Windows drops the hook.
+/// </summary>
 internal sealed class InputHook : IDisposable
 {
     readonly Native.HookProc _keyboardProc;
@@ -23,11 +26,24 @@ internal sealed class InputHook : IDisposable
     {
         _keyboardProc = KeyboardProc;
         _mouseProc = MouseProc;
-        var module = Native.GetModuleHandle(null);
-        _keyboardHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, _keyboardProc, module, 0);
-        _mouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseProc, module, 0);
-        if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero)
+        _keyboardHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, _keyboardProc, Native.GetModuleHandle(null), 0);
+        if (_keyboardHook == IntPtr.Zero)
             throw new InvalidOperationException("Could not install input hooks (error " + Marshal.GetLastWin32Error() + ").");
+    }
+
+    /// <summary>
+    /// Every mouse move on the system waits for a low-level mouse hook, so it's only installed while a menu is
+    /// open; otherwise a busy UI thread here would make the cursor stutter everywhere.
+    /// </summary>
+    public bool MouseEnabled
+    {
+        get => _mouseHook != IntPtr.Zero;
+        set
+        {
+            if (value == MouseEnabled) return;
+            if (value) _mouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseProc, Native.GetModuleHandle(null), 0);
+            else { Native.UnhookWindowsHookEx(_mouseHook); _mouseHook = IntPtr.Zero; }
+        }
     }
 
     IntPtr KeyboardProc(int code, IntPtr wParam, IntPtr lParam)

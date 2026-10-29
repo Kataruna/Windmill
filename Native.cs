@@ -276,9 +276,12 @@ internal static class Native
     /// <summary>True when Windows itself has snapped the window.</summary>
     public static bool IsWindowArranged(IntPtr hWnd)
     {
+        if (_noIsWindowArranged) return false;
         try { return IsWindowArrangedImpl(hWnd); }
-        catch (EntryPointNotFoundException) { return false; } // older Windows 10
+        catch (EntryPointNotFoundException) { _noIsWindowArranged = true; return false; } // older Windows 10
     }
+
+    static bool _noIsWindowArranged; // remembered so polling loops don't throw on every call
 
     public const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
     public const int WM_NCHITTEST = 0x0084;

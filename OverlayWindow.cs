@@ -52,7 +52,7 @@ internal sealed class OverlayWindow : Window
 
     public void PlaceOn(Native.RECT monitor)
     {
-        _surface.ScreenOffset = new Point(monitor.Left, monitor.Top);
+        _surface.Screen = new Rect(monitor.Left, monitor.Top, monitor.Width, monitor.Height);
         if (!IsVisible) Show();
         Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, monitor.Left, monitor.Top, monitor.Width, monitor.Height,
             Native.SWP_NOACTIVATE);
@@ -77,7 +77,7 @@ internal sealed class OverlayWindow : Window
 
         public Action? Dismissed;
         public bool Blur;
-        public Point ScreenOffset; // monitor's top-left on the virtual screen, for capturing what's behind the menu
+        public Rect Screen; // the monitor on the virtual screen, physical pixels; used to capture what's behind the menu
 
         // Blurred snapshot of the screen under the menu, taken when it opens or moves.
         ImageSource? _backdrop;
@@ -102,6 +102,10 @@ internal sealed class OverlayWindow : Window
         readonly double[] _slotAlpha = new double[Arranger.MaxWindows];
 
         readonly Stopwatch _clock = new();
+        bool _ticking;            // subscribed to per-frame updates
+        bool _dirty;              // state changed since the last frame was drawn
+        int _idleFrames;          // consecutive frames with nothing to redraw
+        double _motion;           // largest change of any animated value in the current step
 
         public Surface() => IsHitTestVisible = false;
 
@@ -124,7 +128,6 @@ internal sealed class OverlayWindow : Window
                 _elapsed = 0;
                 _needleAlpha = 0;
                 ResetItems(st);
-                StartTicking();
             }
             else if (_state != null && Content(st) != Content(_state))
             {
@@ -134,9 +137,16 @@ internal sealed class OverlayWindow : Window
             }
             if (!Blur || st.Arrange != null) _backdrop = null;
             else if (fresh || st.Origin != _backdropOrigin) CaptureBackdrop(st);
+            // Controller re-sends the state every 15 ms; only redraw when it actually changed.
+            if (fresh || _state is not { } old || Differs(old, st)) _dirty = true;
             _state = st;
-            InvalidateVisual();
+            StartTicking(); // cheap if already ticking; picks up animations driven by in-place changes (picks, snapshots)
         }
+
+        static bool Differs(OverlayState a, OverlayState b) =>
+            a.Layout != b.Layout || a.Arrange != b.Arrange || a.Toggle != b.Toggle || a.LayoutIndex != b.LayoutIndex ||
+            a.LayoutCount != b.LayoutCount || a.Selected != b.Selected || a.Origin != b.Origin || a.Cursor != b.Cursor ||
+            a.Panel != b.Panel || a.Work != b.Work;
 
         /// <summary>
         /// Windows can only blur a whole rectangular window, so instead snapshot the screen behind the menu once,
@@ -163,7 +173,8 @@ internal sealed class OverlayWindow : Window
                 area.Inflate(24 * s, 24 * s);
             }
             area.Union(new Rect(st.Origin.X - 320 * s, chipsTop, 640 * s, 110 * s));
-            area.Intersect(new Rect(0, 0, ActualWidth * s, ActualHeight * s));
+            // Monitor size, not ActualWidth: the overlay may have just moved and not been laid out at its new size yet.
+            area.Intersect(new Rect(0, 0, Screen.Width, Screen.Height));
             if (area.IsEmpty || area.Width < 1 || area.Height < 1) { _backdrop = null; return; }
 
             const int Down = 4; // blur a quarter-size copy: much cheaper, and scaling it back up softens it further
@@ -172,7 +183,7 @@ internal sealed class OverlayWindow : Window
             {
                 using var shot = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
                 using (var g = System.Drawing.Graphics.FromImage(shot))
-                    g.CopyFromScreen((int)(ScreenOffset.X + area.X), (int)(ScreenOffset.Y + area.Y), 0, 0, new System.Drawing.Size(w, h));
+                    g.CopyFromScreen((int)(Screen.X + area.X), (int)(Screen.Y + area.Y), 0, 0, new System.Drawing.Size(w, h));
                 int sw = Math.Max(1, w / Down), sh = Math.Max(1, h / Down);
                 using var small = new System.Drawing.Bitmap(shot, sw, sh);
                 var data = small.LockBits(new System.Drawing.Rectangle(0, 0, sw, sh),
@@ -226,29 +237,69 @@ internal sealed class OverlayWindow : Window
             _closing = true;
             _snapped = snapped;
             _close = 0;
+            StartTicking();
         }
 
         void StartTicking()
         {
+            if (_ticking) return;
+            _ticking = true;
+            _idleFrames = 0;
             _clock.Restart();
-            CompositionTarget.Rendering -= OnFrame;
             CompositionTarget.Rendering += OnFrame;
         }
+
+        void StopTicking()
+        {
+            if (!_ticking) return;
+            _ticking = false;
+            CompositionTarget.Rendering -= OnFrame;
+        }
+
+        /// <summary>Below this, a change isn't visible (alpha/progress units; rects are scaled to match, see Track).</summary>
+        const double Still = 0.002;
 
         void OnFrame(object? sender, EventArgs e)
         {
             double dt = Math.Min(_clock.Elapsed.TotalMilliseconds, 50); // don't jump after a stall
             _clock.Restart();
+            _motion = 0;
             Step(Motion ? dt : SettledMs);
 
             if (_closing && _close >= 1)
             {
                 _shown = _closing = false;
-                CompositionTarget.Rendering -= OnFrame;
+                StopTicking();
                 Dismissed?.Invoke();
                 return;
             }
-            InvalidateVisual();
+
+            // Redrawing means re-uploading a monitor-sized layered bitmap, so skip frames where nothing moved,
+            // and stop ticking altogether once settled; Present or Dismiss starts it again.
+            bool timed = _closing || _elapsed < OpenMs + StaggerMs * (_hover.Length + 2); // fade, scale-in, cascade
+            if (_dirty || timed || _motion > Still)
+            {
+                _dirty = false;
+                _idleFrames = 0;
+                InvalidateVisual();
+            }
+            else if (++_idleFrames > 2) StopTicking();
+        }
+
+        /// <summary>Records how far an animated value moved this step, for <see cref="OnFrame"/>'s idle check.</summary>
+        double Track(double before, double after)
+        {
+            _motion = Math.Max(_motion, Math.Abs(after - before));
+            return after;
+        }
+
+        Rect Track(Rect before, Rect after)
+        {
+            // 0.01 per pixel: a fifth of a pixel of movement counts as visible.
+            double d = Math.Max(Math.Max(Math.Abs(after.X - before.X), Math.Abs(after.Y - before.Y)),
+                                Math.Max(Math.Abs(after.Width - before.Width), Math.Abs(after.Height - before.Height)));
+            _motion = Math.Max(_motion, d * 0.01);
+            return after;
         }
 
         void Step(double dt)
@@ -259,7 +310,7 @@ internal sealed class OverlayWindow : Window
 
             double hk = Approach(dt, HoverRate), fk = Approach(dt, FollowRate);
             for (int i = 0; i < _hover.Length; i++)
-                _hover[i] += ((i == st.Selected ? 1 : 0) - _hover[i]) * hk;
+                _hover[i] = Track(_hover[i], _hover[i] + ((i == st.Selected ? 1 : 0) - _hover[i]) * hk);
 
             if (st.Arrange is { } ar)
             {
@@ -267,8 +318,8 @@ internal sealed class OverlayWindow : Window
                 {
                     int order = ar.Picked.IndexOf(i);
                     if (order >= 0) _badge[i] = order + 1; // kept while un-picking so the badge can fade out
-                    _pick[i] += ((order >= 0 ? 1 : 0) - _pick[i]) * hk;
-                    if (ar.Cards[i].Thumb != null) _thumb[i] += (1 - _thumb[i]) * fk;
+                    _pick[i] = Track(_pick[i], _pick[i] + ((order >= 0 ? 1 : 0) - _pick[i]) * hk);
+                    if (ar.Cards[i].Thumb != null) _thumb[i] = Track(_thumb[i], _thumb[i] + (1 - _thumb[i]) * fk);
                 }
 
                 // Preview slots glide to their new shape as windows are added or removed.
@@ -278,10 +329,10 @@ internal sealed class OverlayWindow : Window
                     if (i < slots.Count)
                     {
                         var target = ToScreen(ar.Map, slots[i]);
-                        _slot[i] = _slotAlpha[i] < 0.05 ? target : LerpRect(_slot[i], target, fk);
-                        _slotAlpha[i] += (1 - _slotAlpha[i]) * fk;
+                        _slot[i] = Track(_slot[i], _slotAlpha[i] < 0.05 ? target : LerpRect(_slot[i], target, fk));
+                        _slotAlpha[i] = Track(_slotAlpha[i], _slotAlpha[i] + (1 - _slotAlpha[i]) * fk);
                     }
-                    else _slotAlpha[i] -= _slotAlpha[i] * fk;
+                    else _slotAlpha[i] = Track(_slotAlpha[i], _slotAlpha[i] - _slotAlpha[i] * fk);
                 }
                 return;
             }
@@ -290,10 +341,10 @@ internal sealed class OverlayWindow : Window
             {
                 var target = ToScreen(st.Work, st.Layout.Zones[st.Selected].Rect);
                 // A preview that has faded out appears in place; a visible one glides to the new zone.
-                _preview = _previewAlpha < 0.05 ? target : LerpRect(_preview, target, fk);
-                _previewAlpha += (1 - _previewAlpha) * fk;
+                _preview = Track(_preview, _previewAlpha < 0.05 ? target : LerpRect(_preview, target, fk));
+                _previewAlpha = Track(_previewAlpha, _previewAlpha + (1 - _previewAlpha) * fk);
             }
-            else _previewAlpha -= _previewAlpha * fk;
+            else _previewAlpha = Track(_previewAlpha, _previewAlpha - _previewAlpha * fk);
 
             if (st.Layout.Radial)
             {
@@ -302,9 +353,12 @@ internal sealed class OverlayWindow : Window
                 double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
                 double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
                 double delta = ((angle - _needleAngle + 540) % 360) - 180; // turn the short way round
-                _needleAngle = _needleAlpha < 0.05 ? angle : _needleAngle + delta * Approach(dt, 30);
+                // Degrees, so scale down: a tenth of a degree is the smallest visible turn.
+                double turned = _needleAlpha < 0.05 ? angle : _needleAngle + delta * Approach(dt, 30);
+                _motion = Math.Max(_motion, Math.Abs(((turned - _needleAngle + 540) % 360) - 180) * 0.02);
+                _needleAngle = turned;
                 double want = Math.Clamp((dist - 10 * s) / (20 * s), 0, 1);
-                _needleAlpha += (want - _needleAlpha) * fk;
+                _needleAlpha = Track(_needleAlpha, _needleAlpha + (want - _needleAlpha) * fk);
             }
         }
 
@@ -398,7 +452,7 @@ internal sealed class OverlayWindow : Window
                     ctx.ArcTo(Polar(o, nr, _needleAngle + 15), new Size(nr, nr), 0, false, SweepDirection.Counterclockwise, true, false);
                 }
                 needle.Freeze();
-                dc.DrawGeometry(null, new Pen(Brush(WithAlpha(accent, (byte)(230 * _needleAlpha))), 6 * s)
+                dc.DrawGeometry(null, new Pen(Brush(WithAlpha(accent, (byte)(230 * _needleAlpha))), 3.5 * s)
                     { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, needle);
             }
 

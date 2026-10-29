@@ -10,8 +10,9 @@
     <AssemblyName>Windmill</AssemblyName>
     <RootNamespace>Windmill</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- Window.ThemeMode (Fluent theme) is experimental in .NET 9. -->
-    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <!-- Window.ThemeMode (Fluent theme) is experimental in .NET 9.
+         WFO0003 wants DPI awareness set from WinForms code instead, but this is a WPF app that needs it in app.manifest. -->
+    <NoWarn>$(NoWarn);WPF0001;WFO0003</NoWarn>
   </PropertyGroup>
 
 </Project>

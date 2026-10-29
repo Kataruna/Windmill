@@ -23,10 +23,15 @@ internal static class WindowSnapper
     }
 
     /// <param name="snapAssist">Leave Windows' Snap Assist open after a native snap.</param>
+    // Bumped by every snap. A native snap still waiting or checking its result gives up once a newer snap has
+    // started, so its fallback can't drag the window back to the old zone. UI thread only.
+    static int _generation;
+
     public static void Snap(IntPtr hwnd, Native.RECT work, Zone zone, int gap, SnapStyle style, bool snapAssist)
     {
+        int generation = ++_generation;
         if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && ArrowsFor(zone.Rect) is { } arrows)
-            _ = SnapNativeAsync(hwnd, work, zone, arrows, snapAssist);
+            _ = SnapNativeAsync(hwnd, work, zone, arrows, snapAssist, generation);
         else
             Place(hwnd, work, zone, gap, remember: style == SnapStyle.Native);
     }
@@ -44,14 +49,17 @@ internal static class WindowSnapper
         return null;
     }
 
-    static async Task SnapNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort[] arrows, bool snapAssist)
+    static async Task SnapNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort[] arrows, bool snapAssist, int generation)
     {
+        bool Superseded() => generation != _generation;
+
         // Win+Ctrl/Shift/Alt+Arrow are different commands, so wait for the user to let go of every modifier
         // (in Toggle mode the shortcut is still down at commit). Async: the input hooks live on this thread.
         for (int i = 0; ModifierDown(); i++)
         {
             if (i > 200) { Place(hwnd, work, zone, 0, remember: true); return; } // ~3 s
             await Task.Delay(15);
+            if (Superseded()) return;
         }
         if (!Native.IsWindow(hwnd)) return;
 
@@ -60,6 +68,7 @@ internal static class WindowSnapper
         {
             Native.ShowWindow(hwnd, Native.SW_RESTORE);
             await Task.Delay(50); // let Windows finish leaving the snapped state before the next snap
+            if (Superseded()) return;
         }
 
         // Win+Arrow snaps on the window's current monitor, so move it there first.
@@ -80,7 +89,10 @@ internal static class WindowSnapper
                 var start = VisibleRect(hwnd, out _);
                 Native.SendWinArrows(new[] { arrow });
                 for (int i = 0; i < 30 && !(Native.IsWindowArranged(hwnd) && !Same(VisibleRect(hwnd, out _), start)); i++)
+                {
                     await Task.Delay(15);
+                    if (Superseded()) return;
+                }
                 // Didn't snap: stop, since Win+Up/Down on an unsnapped window would maximize or minimize it.
                 if (!Native.IsWindowArranged(hwnd)) { snapped = false; break; }
 
@@ -95,12 +107,14 @@ internal static class WindowSnapper
                         break;
                     }
                     await Task.Delay(15);
+                    if (Superseded()) return;
                 }
             }
             var target = TargetRect(work, zone, 0);
             for (int i = 0; snapped && i < 40; i++) // ~600 ms
             {
                 await Task.Delay(15);
+                if (Superseded()) return;
                 var v = VisibleRect(hwnd, out _);
                 if (Math.Abs(v.Left - target.Left) <= 8 && Math.Abs(v.Top - target.Top) <= 8 &&
                     Math.Abs(v.Right - target.Right) <= 8 && Math.Abs(v.Bottom - target.Bottom) <= 8)
@@ -144,6 +158,7 @@ internal static class WindowSnapper
     /// <summary>Moves and resizes the window into the zone. <paramref name="remember"/>: restore its size when dragged away.</summary>
     public static void Place(IntPtr hwnd, Native.RECT work, Zone zone, int gap, bool remember)
     {
+        _generation++; // any placement (auto-arrange too) supersedes a native snap still in progress
         if (!Native.IsWindow(hwnd)) return;
 
         if (Native.IsIconic(hwnd) || Native.IsZoomed(hwnd) || (remember && Native.IsWindowArranged(hwnd)))

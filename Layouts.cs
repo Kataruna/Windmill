@@ -140,19 +140,33 @@ internal static class FancyZones
 
             foreach (var item in items.EnumerateArray())
             {
-                var name = "FZ: " + (item.TryGetProperty("name", out var n) ? n.GetString() : "Custom");
-                var type = item.GetProperty("type").GetString();
-                var info = item.GetProperty("info");
-                var layout = type == "grid" ? FromGrid(name, info) : FromCanvas(name, info);
-                if (layout.Zones.Count > 0) result.Add(layout);
+                // One malformed layout is skipped; the rest still load.
+                try
+                {
+                    var name = "FZ: " + (item.TryGetProperty("name", out var n) ? n.GetString() : "Custom");
+                    var type = item.GetProperty("type").GetString();
+                    var info = item.GetProperty("info");
+                    var layout = type == "grid" ? FromGrid(name, info) : FromCanvas(name, info);
+                    layout.Zones.RemoveAll(z => !Valid(z.Rect));
+                    if (layout.Zones.Count > 0) result.Add(layout);
+                }
+                catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException
+                                               or IndexOutOfRangeException or ArgumentException)
+                {
+                }
             }
         }
-        catch (Exception ex) when (ex is IOException or JsonException or KeyNotFoundException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         {
             // A malformed or locked FancyZones file shouldn't stop Windmill; built-in layouts still work.
         }
         return result;
     }
+
+    /// <summary>Finite, non-empty, and at least partly on screen (a zero reference size makes NaN or infinity).</summary>
+    static bool Valid(NRect r) =>
+        double.IsFinite(r.X) && double.IsFinite(r.Y) && double.IsFinite(r.W) && double.IsFinite(r.H) &&
+        r.W > 0 && r.H > 0 && r.X < 1 && r.Y < 1 && r.X + r.W > 0 && r.Y + r.H > 0;
 
     static Layout FromGrid(string name, JsonElement info)
     {
