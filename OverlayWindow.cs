@@ -147,18 +147,22 @@ internal sealed class OverlayWindow : Window
             _backdropOrigin = st.Origin;
             double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
             Rect area;
+            double chipsTop; // the name and hint chips sit centred below the menu
             if (st.Layout.Radial)
             {
                 double r = RadialMetrics.Outer * s * 1.15 + 24 * s; // room for the open/close overshoot and blur edge
                 area = new Rect(st.Origin.X - r, st.Origin.Y - r, 2 * r, 2 * r);
+                chipsTop = st.Origin.Y + RadialMetrics.Outer * s;
             }
             else
             {
                 area = st.Panel;
                 area.Inflate(8 * s, 8 * s);
+                chipsTop = area.Bottom;
                 area.Transform(new ScaleTransform(1.15, 1.15, st.Origin.X, st.Origin.Y).Value);
                 area.Inflate(24 * s, 24 * s);
             }
+            area.Union(new Rect(st.Origin.X - 320 * s, chipsTop, 640 * s, 110 * s));
             area.Intersect(new Rect(0, 0, ActualWidth * s, ActualHeight * s));
             if (area.IsEmpty || area.Width < 1 || area.Height < 1) { _backdrop = null; return; }
 
@@ -699,11 +703,12 @@ internal sealed class OverlayWindow : Window
             return g;
         }
 
-        static void DrawPill(DrawingContext dc, string text, Point centerTop, double size, double s)
+        void DrawPill(DrawingContext dc, string text, Point centerTop, double size, double s)
         {
             var ft = Text(text, size, Brushes.White, s);
             var box = new Rect(centerTop.X - ft.Width / 2 - 14 * s, centerTop.Y - 4 * s, ft.Width + 28 * s, ft.Height + 8 * s);
-            dc.DrawRoundedRectangle(Brush(Color.FromArgb(210, 24, 24, 28)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
+            DrawBackdrop(dc, new RectangleGeometry(box, box.Height / 2, box.Height / 2));
+            dc.DrawRoundedRectangle(Brush(Color.FromArgb(_backdrop != null ? (byte)165 : (byte)210, 24, 24, 28)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
                 box, box.Height / 2, box.Height / 2);
             dc.DrawText(ft, new Point(box.X + 14 * s, box.Y + 4 * s));
         }
