@@ -1,0 +1,250 @@
+<Window x:Class="Windmill.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        ThemeMode="System"
+        Title="Windmill Settings"
+        Width="600" Height="680" MinWidth="440" MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="14">
+
+    <Window.Resources>
+        <!-- Fluent "card": 8px radius, 1px stroke, 16px padding. -->
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+        <Style x:Key="CardCaption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+        </Style>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="2,20,0,8"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{DynamicResource ApplicationBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="32,24,32,16">
+                <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <TextBlock Style="{StaticResource CardCaption}" FontSize="14"
+                           Text="Hold your shortcut over a window, move toward a zone, then release to snap."/>
+
+                <TextBlock Style="{StaticResource SectionHeader}" Text="Activation"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Shortcut"/>
+                            <TextBlock x:Name="ShortcutCaption" Style="{StaticResource CardCaption}"
+                                       Text="Keys to hold together. Select, then press the combination you want."/>
+                        </StackPanel>
+                        <Button x:Name="ShortcutButton" Grid.Column="1" MinWidth="140" Padding="16,6"
+                                Click="OnRecordShortcut" Content="Alt"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Snap menu behavior"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Hold: open while held, release to snap. Toggle: tap to open, then click a zone (or press the shortcut or Enter) to snap."/>
+                        </StackPanel>
+                        <ComboBox x:Name="SnapStyleBox" Grid.Column="1" MinWidth="140" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <ComboBoxItem Content="Hold"/>
+                            <ComboBoxItem Content="Toggle"/>
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Hold delay"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="How long to hold before the menu opens. Raise it if quick shortcuts like Alt+Left trigger it."/>
+                        </StackPanel>
+                        <Slider x:Name="DelaySlider" Grid.Column="1" Minimum="0" Maximum="1000"
+                                SmallChange="10" LargeChange="50" TickFrequency="10" IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center" Margin="16,0,8,0"/>
+                        <TextBlock Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="{Binding Value, ElementName=DelaySlider, StringFormat={}{0:0} ms}"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Ring size"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Size of the radial menu. Smaller means less mouse travel to reach a zone."/>
+                        </StackPanel>
+                        <Slider x:Name="RingSizeSlider" Grid.Column="1" Minimum="50" Maximum="150"
+                                SmallChange="5" LargeChange="10" TickFrequency="5" IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center" Margin="16,0,8,0"/>
+                        <TextBlock Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="{Binding Value, ElementName=RingSizeSlider, StringFormat={}{0:0}%}"/>
+                    </Grid>
+                </Border>
+
+                <TextBlock Style="{StaticResource SectionHeader}" Text="Auto-arrange"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Auto-arrange windows"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Hold this shortcut to see your open windows. Click up to six in order, then release to tile them."/>
+                        </StackPanel>
+                        <CheckBox x:Name="ArrangeBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"
+                                  Checked="OnArrangeToggled" Unchecked="OnArrangeToggled"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Arrange shortcut"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Keys to hold together. Must differ from the snap shortcut."/>
+                        </StackPanel>
+                        <Button x:Name="ArrangeButton" Grid.Column="1" MinWidth="140" Padding="16,6"
+                                Click="OnRecordShortcut" Content="Alt + Shift"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Arrange behavior"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Hold: pick while held, release to arrange. Toggle: tap to open, pick with clicks, then press the shortcut or Enter to arrange."/>
+                        </StackPanel>
+                        <ComboBox x:Name="ArrangeStyleBox" Grid.Column="1" MinWidth="140" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <ComboBoxItem Content="Hold"/>
+                            <ComboBoxItem Content="Toggle"/>
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <TextBlock Style="{StaticResource SectionHeader}" Text="Windows"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Gap between windows"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Space left around snapped windows."/>
+                        </StackPanel>
+                        <Slider x:Name="GapSlider" Grid.Column="1" Minimum="0" Maximum="48"
+                                SmallChange="1" LargeChange="4" TickFrequency="1" IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center" Margin="16,0,8,0"/>
+                        <TextBlock Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="{Binding Value, ElementName=GapSlider, StringFormat={}{0:0} px}"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="PowerToys FancyZones layouts"/>
+                            <TextBlock x:Name="LayoutsCaption" Style="{StaticResource CardCaption}"/>
+                        </StackPanel>
+                        <CheckBox x:Name="FancyZonesBox" Grid.Column="1" Content="Include" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+
+                <TextBlock Style="{StaticResource SectionHeader}" Text="General"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Start with Windows"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Run Windmill in the notification area when you sign in."/>
+                        </StackPanel>
+                        <CheckBox x:Name="StartupBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="1" Padding="32,12" BorderThickness="0,1,0,0"
+                Background="{DynamicResource ControlFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+            <Grid>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Close" MinWidth="88" Padding="16,6" Margin="0,0,8,0" Click="OnClose"/>
+                    <Button Content="Save" MinWidth="88" Padding="16,6" Click="OnSave"
+                            Style="{DynamicResource AccentButtonStyle}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
