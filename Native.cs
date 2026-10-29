@@ -108,6 +108,11 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT pt);
 
+    public const int SM_CXDRAG = 68, SM_CYDRAG = 69;
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 

@@ -352,11 +352,12 @@ internal sealed class OverlayWindow : Window
                 double dist = Math.Sqrt(dx * dx + dy * dy);
                 double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
                 double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
-                double delta = ((angle - _needleAngle + 540) % 360) - 180; // turn the short way round
+                double delta = Wrap180(angle - _needleAngle); // turn the short way round
                 // Degrees, so scale down: a tenth of a degree is the smallest visible turn.
                 double turned = _needleAlpha < 0.05 ? angle : _needleAngle + delta * Approach(dt, 30);
-                _motion = Math.Max(_motion, Math.Abs(((turned - _needleAngle + 540) % 360) - 180) * 0.02);
-                _needleAngle = turned;
+                _motion = Math.Max(_motion, Math.Abs(Wrap180(turned - _needleAngle)) * 0.02);
+                // Kept in [-180, 180) so it can't wind up over many turns; drawing it is the same either way.
+                _needleAngle = Wrap180(turned);
                 double want = Math.Clamp((dist - 10 * s) / (20 * s), 0, 1);
                 _needleAlpha = Track(_needleAlpha, _needleAlpha + (want - _needleAlpha) * fk);
             }
@@ -364,6 +365,9 @@ internal sealed class OverlayWindow : Window
 
         /// <summary>Fraction of the remaining distance to cover this frame, independent of frame rate.</summary>
         static double Approach(double dtMs, double rate) => 1 - Math.Exp(-rate * dtMs / 1000);
+
+        /// <summary>The same angle in [-180, 180). C#'s % keeps the sign of a negative input, so add 360 back.</summary>
+        static double Wrap180(double degrees) => ((degrees + 180) % 360 + 360) % 360 - 180;
 
         // ---- drawing ----
 
