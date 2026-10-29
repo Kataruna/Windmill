@@ -72,30 +72,40 @@ internal static class Program
             Visible = true,
         };
         icon.DoubleClick += (_, _) => ShowSettings(controller);
+
+        // Follow the taskbar when the Windows theme changes. The event can arrive on another thread.
+        var ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, e) =>
+        {
+            if (e.Category != Microsoft.Win32.UserPreferenceCategory.General) return;
+            ui.BeginInvoke(() =>
+            {
+                var old = icon.Icon;
+                icon.Icon = MakeIcon();
+                old?.Dispose();
+            });
+        };
         return icon;
     }
 
+    /// <summary>The logo at tray size: all white on a dark taskbar, in colour on a light one.</summary>
     static SD.Icon MakeIcon()
     {
-        using var bmp = new SD.Bitmap(32, 32);
-        using (var g = SD.Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = SD.Drawing2D.SmoothingMode.AntiAlias;
-            SD.Color[] colors = { SD.Color.FromArgb(59, 130, 246), SD.Color.FromArgb(34, 197, 94), SD.Color.FromArgb(250, 204, 21), SD.Color.FromArgb(239, 68, 68) };
-            // Four pinwheel blades, one per quadrant.
-            SD.Point[][] blades =
-            {
-                new[] { new SD.Point(16, 16), new SD.Point(16, 2), new SD.Point(28, 4) },
-                new[] { new SD.Point(16, 16), new SD.Point(30, 16), new SD.Point(28, 28) },
-                new[] { new SD.Point(16, 16), new SD.Point(16, 30), new SD.Point(4, 28) },
-                new[] { new SD.Point(16, 16), new SD.Point(2, 16), new SD.Point(4, 4) },
-            };
-            for (int i = 0; i < 4; i++)
-            {
-                using var brush = new SD.SolidBrush(colors[i]);
-                g.FillPolygon(brush, blades[i]);
-            }
-        }
-        return SD.Icon.FromHandle(bmp.GetHicon());
+        int size = Math.Max(16, WF.SystemInformation.SmallIconSize.Width);
+        using var bmp = Logo.Render(size, TaskbarIsLight() ? null : SD.Color.White);
+        IntPtr handle = bmp.GetHicon();
+        try { return (SD.Icon)SD.Icon.FromHandle(handle).Clone(); } // the clone owns its own copy
+        finally { DestroyIcon(handle); }
     }
+
+    /// <summary>The taskbar's theme (Settings > Personalization > Colors > "Choose your default Windows mode").</summary>
+    static bool TaskbarIsLight()
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+        return key?.GetValue("SystemUsesLightTheme") is int light && light != 0; // missing on old Windows 10: dark
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool DestroyIcon(IntPtr hIcon);
 }

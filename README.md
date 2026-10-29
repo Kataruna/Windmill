@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Windmill-white.svg">
+    <img src="Windmill.svg" alt="Windmill logo" width="128">
+  </picture>
+</p>
+
 # Windmill
 
 A gesture-based window snapper for Windows. Hold a key, flick the mouse toward where you want the window, let go.
