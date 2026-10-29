@@ -56,14 +56,19 @@ Settings are stored in `%APPDATA%\Windmill\settings.json`.
 
 ## Install
 
-Windmill doesn't have a release download yet, so build it from source.
+Run `WindmillSetup-<version>.exe`. It installs for your user only, with no admin prompt, into `%LOCALAPPDATA%\Programs\Windmill`. It adds a Start menu shortcut and can start Windmill when you sign in. To install for all users, choose that option in the first dialog.
+
+Uninstall from **Settings → Apps**. Your settings in `%APPDATA%\Windmill` are kept.
+
+## Build from source
 
 ### Requirements
 
 - Windows 10 or 11 (x64)
-- [.NET 9 SDK](https://dotnet.microsoft.com/download) or newer, to build
+- [.NET 9 SDK](https://dotnet.microsoft.com/download) or newer
+- [Inno Setup 6](https://jrsoftware.org/isinfo.php), only to build the installer
 
-### Build and run
+### Build
 
 ```
 git clone https://github.com/Kataruna/Windmill.git
@@ -71,7 +76,15 @@ cd Windmill
 dotnet publish -p:PublishProfile=dist
 ```
 
-This produces `dist\Windmill.exe`, a single self-contained file. It doesn't need .NET installed to run. Start it and look for the pinwheel icon in the notification area.
+This produces `dist\Windmill.exe`, a single self-contained file that doesn't need .NET installed. Start it and look for the pinwheel icon in the notification area.
+
+To also build the installer:
+
+```
+ISCC installer\Windmill.iss
+```
+
+This produces `dist\WindmillSetup-<version>.exe`. The version comes from `<Version>` in `Windmill.csproj`.
 
 For development, `dotnet build` and `dotnet run` also work.
 
