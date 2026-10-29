@@ -90,11 +90,8 @@ internal static class Arranger
     {
         if (!Native.IsWindow(h) || Native.IsHungAppWindow(h)) return null; // PrintWindow would wait on it
 
-        Native.GetWindowRect(h, out var outer);
         // Crop the invisible resize borders, same as when snapping.
-        if (Native.DwmGetWindowAttribute(h, Native.DWMWA_EXTENDED_FRAME_BOUNDS, out var visible,
-                Marshal.SizeOf<Native.RECT>()) != 0)
-            visible = outer;
+        var visible = WindowSnapper.VisibleRect(h, out var outer);
         if (outer.Width <= 0 || outer.Height <= 0 || visible.Width <= 0 || visible.Height <= 0) return null;
 
         try

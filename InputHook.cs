@@ -22,6 +22,9 @@ internal sealed class InputHook : IDisposable
     /// <summary>Left button (true = pressed) -> true to swallow the event.</summary>
     public Func<bool, bool>? Click;
 
+    /// <summary>The mouse hook couldn't be installed (Win32 error code); scrolling and clicks won't reach the menu.</summary>
+    public Action<int>? MouseHookFailed;
+
     public InputHook()
     {
         _keyboardProc = KeyboardProc;
@@ -41,7 +44,11 @@ internal sealed class InputHook : IDisposable
         set
         {
             if (value == MouseEnabled) return;
-            if (value) _mouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseProc, Native.GetModuleHandle(null), 0);
+            if (value)
+            {
+                _mouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseProc, Native.GetModuleHandle(null), 0);
+                if (_mouseHook == IntPtr.Zero) MouseHookFailed?.Invoke(Marshal.GetLastWin32Error());
+            }
             else { Native.UnhookWindowsHookEx(_mouseHook); _mouseHook = IntPtr.Zero; }
         }
     }

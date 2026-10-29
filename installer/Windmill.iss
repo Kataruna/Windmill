@@ -39,7 +39,9 @@ OutputDir=..\dist
 OutputBaseFilename=WindmillSetup-{#AppVersion}
 
 [Tasks]
-Name: "startup"; Description: "Start Windmill when I sign in"; GroupDescription: "Options:"
+; Per-user only: the app's own setting lives in the signed-in user's HKCU, but an admin install's HKCU can be a
+; different (elevating) account's. "Start with Windows" in Settings still works after an all-users install.
+Name: "startup"; Description: "Start Windmill when I sign in"; GroupDescription: "Options:"; Check: not IsAdminInstallMode
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
@@ -59,25 +61,38 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 
 [Run]
 Filename: "{app}\Windmill.exe"; Description: "Start Windmill now"; Flags: nowait postinstall skipifsilent
+; A silent upgrade (/SILENT, /VERYSILENT, winget) skips the entry above, so start it again if setup closed it.
+Filename: "{app}\Windmill.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent and WasRunning
 
 [Code]
 // Windmill lives in the tray with no window, so the Restart Manager can't ask it to close.
 // End it directly before replacing or removing the exe.
-procedure StopWindmill();
+var
+  Stopped: Boolean;
+
+// True if Windmill was running and got closed.
+function StopWindmill(): Boolean;
 var
   Code: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im Windmill.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im Windmill.exe', '', SW_HIDE, ewWaitUntilTerminated, Code)
+    and (Code = 0);
+end;
+
+function WasRunning(): Boolean;
+begin
+  Result := Stopped;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  StopWindmill();
+  Stopped := StopWindmill();
   Result := '';
 end;
 
-function InitializeUninstall(): Boolean;
+// Only once the user has confirmed: closing it in InitializeUninstall would leave it closed if they cancel.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  StopWindmill();
-  Result := True;
+  if CurUninstallStep = usUninstall then
+    StopWindmill();
 end;

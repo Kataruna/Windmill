@@ -91,6 +91,7 @@ For development, `dotnet build` and `dotnet run` also work.
 ## Limitations
 
 - Native snap only applies to halves and quarters with the gap set to 0. Everything else, and all of auto-arrange, is moved and resized by Windmill.
+- On Windows 10 versions older than 1903, Windows can't tell Windmill whether a snap worked, so Windmill always moves and resizes there.
 - Windmill can't move windows of apps running as administrator unless Windmill also runs as administrator. This is a Windows restriction.
 - The snap shortcut uses a global keyboard hook. While a menu is open, Windmill also briefly installs a mouse hook for scrolling and clicks.
 

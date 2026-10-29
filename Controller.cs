@@ -66,7 +66,19 @@ internal sealed class Controller : IDisposable
         _hook.Key = OnKey;
         _hook.Wheel = OnWheel;
         _hook.Click = OnClick;
+        _hook.MouseHookFailed = error =>
+        {
+            if (_warnedMouseHook) return; // retried on every open; say it once
+            _warnedMouseHook = true;
+            // Can arrive inside a hook callback, which must return quickly.
+            _ui.BeginInvoke(() => Warning?.Invoke($"Windmill couldn't watch the mouse (error {error}), so scrolling and clicking won't work " +
+                "in the menu. Use Tab to change layout and Enter or Esc to finish."));
+        };
     }
+
+    /// <summary>Something the user should know about that doesn't stop Windmill from running. Raised on the UI thread.</summary>
+    public event Action<string>? Warning;
+    bool _warnedMouseHook;
 
     public void Reload()
     {

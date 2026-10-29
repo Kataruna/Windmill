@@ -1,10 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
 namespace Windmill;
@@ -83,6 +83,7 @@ internal sealed class OverlayWindow : Window
         ImageSource? _backdrop;
         Rect _backdropRect;
         Point _backdropOrigin;
+        int _backdropVersion;     // bumped per capture; a worker's result only lands if it's still the latest
 
         OverlayState? _state;
         bool _shown, _closing, _snapped;
@@ -135,12 +136,14 @@ internal sealed class OverlayWindow : Window
                 _elapsed = 0;
                 ResetItems(st);
             }
-            if (!Blur || st.Arrange != null) _backdrop = null;
-            else if (fresh || st.Origin != _backdropOrigin) CaptureBackdrop(st);
+            if (!Blur || st.Arrange != null) { _backdrop = null; _backdropVersion++; }
+            else if (fresh || st.Origin != _backdropOrigin) CaptureBackdrop(st, fresh);
             // Controller re-sends the state every 15 ms; only redraw when it actually changed.
             if (fresh || _state is not { } old || Differs(old, st)) _dirty = true;
             _state = st;
-            StartTicking(); // cheap if already ticking; picks up animations driven by in-place changes (picks, snapshots)
+            // A still menu stays stopped (see OnFrame). Auto-arrange changes in place (picks, snapshots arriving),
+            // which Differs can't see, so it keeps ticking while open.
+            if (_dirty || st.Arrange != null) StartTicking();
         }
 
         static bool Differs(OverlayState a, OverlayState b) =>
@@ -149,12 +152,18 @@ internal sealed class OverlayWindow : Window
             a.Panel != b.Panel || a.Work != b.Work;
 
         /// <summary>
-        /// Windows can only blur a whole rectangular window, so instead snapshot the screen behind the menu once,
-        /// blur it, and draw it clipped to the menu's shape. Our own overlay is layered, so the plain screen copy skips it.
+        /// Windows can only blur a whole rectangular window, so instead snapshot the screen behind the menu, blur it,
+        /// and draw it clipped to the menu's shape. Our own overlay is layered, so the plain screen copy skips it.
+        /// The copy and blur run on a worker thread: this thread also runs the global keyboard hook, which every
+        /// keypress on the system waits for.
         /// </summary>
-        void CaptureBackdrop(OverlayState st)
+        void CaptureBackdrop(OverlayState st, bool fresh)
         {
             _backdropOrigin = st.Origin;
+            int version = ++_backdropVersion;
+            // A new menu mustn't show the last one's snapshot; a moved one keeps it until the new one is ready.
+            if (fresh) _backdrop = null;
+
             double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
             Rect area;
             double chipsTop; // the name and hint chips sit centred below the menu
@@ -177,33 +186,81 @@ internal sealed class OverlayWindow : Window
             area.Intersect(new Rect(0, 0, Screen.Width, Screen.Height));
             if (area.IsEmpty || area.Width < 1 || area.Height < 1) { _backdrop = null; return; }
 
+            int x = (int)(Screen.X + area.X), y = (int)(Screen.Y + area.Y), w = (int)area.Width, h = (int)area.Height;
+            Task.Run(() =>
+            {
+                var blurred = BlurredScreen(x, y, w, h);
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (version != _backdropVersion || !_shown || _closing) return; // superseded or gone
+                    _backdrop = blurred;
+                    _backdropRect = area;
+                    _dirty = true;
+                    StartTicking();
+                });
+            });
+        }
+
+        /// <summary>A blurred, quarter-size copy of part of the screen, frozen for use on the UI thread; null if it can't be read.</summary>
+        static BitmapSource? BlurredScreen(int x, int y, int w, int h)
+        {
             const int Down = 4; // blur a quarter-size copy: much cheaper, and scaling it back up softens it further
-            int w = (int)area.Width, h = (int)area.Height;
             try
             {
                 using var shot = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
                 using (var g = System.Drawing.Graphics.FromImage(shot))
-                    g.CopyFromScreen((int)(Screen.X + area.X), (int)(Screen.Y + area.Y), 0, 0, new System.Drawing.Size(w, h));
+                    g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h));
                 int sw = Math.Max(1, w / Down), sh = Math.Max(1, h / Down);
                 using var small = new System.Drawing.Bitmap(shot, sw, sh);
                 var data = small.LockBits(new System.Drawing.Rectangle(0, 0, sw, sh),
                     System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-                BitmapSource src;
-                try { src = BitmapSource.Create(sw, sh, 96, 96, PixelFormats.Bgr32, null, data.Scan0, data.Stride * sh, data.Stride); }
+                var px = new int[sw * sh];
+                try
+                {
+                    for (int row = 0; row < sh; row++)
+                        System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + row * data.Stride, px, row * sw, sw);
+                }
                 finally { small.UnlockBits(data); }
 
-                var img = new System.Windows.Controls.Image { Source = src, Effect = new BlurEffect { Radius = 8 } };
-                img.Measure(new Size(sw, sh));
-                img.Arrange(new Rect(0, 0, sw, sh));
-                var blurred = new RenderTargetBitmap(sw, sh, 96, 96, PixelFormats.Pbgra32);
-                blurred.Render(img);
-                blurred.Freeze();
-                _backdrop = blurred;
-                _backdropRect = area;
+                // Three box blurs approximate a Gaussian; radius 2 at quarter size is close to the old BlurEffect radius 8.
+                var tmp = new int[px.Length];
+                for (int pass = 0; pass < 3; pass++)
+                {
+                    BoxBlur(px, tmp, sw, sh, 2, horizontal: true);
+                    BoxBlur(tmp, px, sw, sh, 2, horizontal: false);
+                }
+                var src = BitmapSource.Create(sw, sh, 96, 96, PixelFormats.Bgr32, null, px, sw * 4);
+                src.Freeze();
+                return src;
             }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or ArgumentException or System.Runtime.InteropServices.ExternalException)
             {
-                _backdrop = null; // e.g. the secure desktop is up; just draw without blur
+                return null; // e.g. the secure desktop is up; just draw without blur
+            }
+        }
+
+        /// <summary>One box-blur pass along rows or columns of a Bgr32 image, with edge pixels repeated.</summary>
+        static void BoxBlur(int[] src, int[] dst, int w, int h, int r, bool horizontal)
+        {
+            int lines = horizontal ? h : w, len = horizontal ? w : h, step = horizontal ? 1 : w, n = 2 * r + 1;
+            for (int line = 0; line < lines; line++)
+            {
+                int start = horizontal ? line * w : line;
+                int b = 0, g = 0, red = 0;
+                for (int i = -r; i <= r; i++)
+                {
+                    int p = src[start + Math.Clamp(i, 0, len - 1) * step];
+                    b += p & 0xFF; g += (p >> 8) & 0xFF; red += (p >> 16) & 0xFF;
+                }
+                for (int i = 0; i < len; i++)
+                {
+                    dst[start + i * step] = (b / n) | ((g / n) << 8) | ((red / n) << 16);
+                    int add = src[start + Math.Min(i + r + 1, len - 1) * step];
+                    int drop = src[start + Math.Max(i - r, 0) * step];
+                    b += (add & 0xFF) - (drop & 0xFF);
+                    g += ((add >> 8) & 0xFF) - ((drop >> 8) & 0xFF);
+                    red += ((add >> 16) & 0xFF) - ((drop >> 16) & 0xFF);
+                }
             }
         }
 
@@ -352,11 +409,12 @@ internal sealed class OverlayWindow : Window
                 double dist = Math.Sqrt(dx * dx + dy * dy);
                 double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
                 double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
-                double delta = ((angle - _needleAngle + 540) % 360) - 180; // turn the short way round
+                double delta = Wrap180(angle - _needleAngle); // turn the short way round
                 // Degrees, so scale down: a tenth of a degree is the smallest visible turn.
                 double turned = _needleAlpha < 0.05 ? angle : _needleAngle + delta * Approach(dt, 30);
-                _motion = Math.Max(_motion, Math.Abs(((turned - _needleAngle + 540) % 360) - 180) * 0.02);
-                _needleAngle = turned;
+                _motion = Math.Max(_motion, Math.Abs(Wrap180(turned - _needleAngle)) * 0.02);
+                // Kept in [-180, 180) so it can't wind up over many turns; drawing it is the same either way.
+                _needleAngle = Wrap180(turned);
                 double want = Math.Clamp((dist - 10 * s) / (20 * s), 0, 1);
                 _needleAlpha = Track(_needleAlpha, _needleAlpha + (want - _needleAlpha) * fk);
             }
@@ -364,6 +422,9 @@ internal sealed class OverlayWindow : Window
 
         /// <summary>Fraction of the remaining distance to cover this frame, independent of frame rate.</summary>
         static double Approach(double dtMs, double rate) => 1 - Math.Exp(-rate * dtMs / 1000);
+
+        /// <summary>The same angle in [-180, 180). C#'s % keeps the sign of a negative input, so add 360 back.</summary>
+        static double Wrap180(double degrees) => ((degrees + 180) % 360 + 360) % 360 - 180;
 
         // ---- drawing ----
 
@@ -694,12 +755,12 @@ internal sealed class OverlayWindow : Window
             dc.DrawText(t, new Point(r.X + (r.Width - t.Width) / 2, r.Y + (r.Height - t.Height) / 2));
         }
 
-        /// <summary>Dark rounded panel with a soft drop shadow, shared by the menus.</summary>
         const double PanelRadius = 14;
 
         /// <summary>Menu background opacity; see-through enough to show the blur when it's on.</summary>
         byte PanelAlpha => _backdrop != null ? (byte)165 : (byte)225;
 
+        /// <summary>Dark rounded panel with a soft drop shadow, shared by the menus.</summary>
         static void DrawPanel(DrawingContext dc, Rect frame, double s, byte alpha = 225)
         {
             double radius = PanelRadius * s;

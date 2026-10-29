@@ -22,15 +22,25 @@ internal static class WindowSnapper
         return Native.ClassOf(hwnd) is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd");
     }
 
-    /// <param name="snapAssist">Leave Windows' Snap Assist open after a native snap.</param>
-    // Bumped by every snap. A native snap still waiting or checking its result gives up once a newer snap has
-    // started, so its fallback can't drag the window back to the old zone. UI thread only.
-    static int _generation;
+    // Per window, bumped by every snap of that window. A native snap still waiting or checking its result gives up
+    // once a newer snap of the same window has started, so its fallback can't drag the window back to the old zone.
+    // Snapping a different window doesn't interrupt it. UI thread only.
+    static readonly Dictionary<IntPtr, int> _generation = new();
 
+    static int NextGeneration(IntPtr hwnd)
+    {
+        foreach (var gone in new List<IntPtr>(_generation.Keys))
+            if (!Native.IsWindow(gone)) _generation.Remove(gone);
+        int g = _generation.GetValueOrDefault(hwnd) + 1;
+        _generation[hwnd] = g;
+        return g;
+    }
+
+    /// <param name="snapAssist">Leave Windows' Snap Assist open after a native snap.</param>
     public static void Snap(IntPtr hwnd, Native.RECT work, Zone zone, int gap, SnapStyle style, bool snapAssist)
     {
-        int generation = ++_generation;
-        if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && ArrowsFor(zone.Rect) is { } arrows)
+        int generation = NextGeneration(hwnd);
+        if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && Native.CanDetectSnap && ArrowsFor(zone.Rect) is { } arrows)
             _ = SnapNativeAsync(hwnd, work, zone, arrows, snapAssist, generation);
         else
             Place(hwnd, work, zone, gap, remember: style == SnapStyle.Native);
@@ -51,7 +61,7 @@ internal static class WindowSnapper
 
     static async Task SnapNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort[] arrows, bool snapAssist, int generation)
     {
-        bool Superseded() => generation != _generation;
+        bool Superseded() => generation != _generation.GetValueOrDefault(hwnd);
 
         // Win+Ctrl/Shift/Alt+Arrow are different commands, so wait for the user to let go of every modifier
         // (in Toggle mode the shortcut is still down at commit). Async: the input hooks live on this thread.
@@ -85,6 +95,8 @@ internal static class WindowSnapper
             bool snapped = true;
             for (int a = 0; a < arrows.Length; a++)
             {
+                // The user may have clicked another window while we waited; the arrow would act on that one.
+                if (a > 0 && Native.GetForegroundWindow() != hwnd) { snapped = false; break; }
                 var arrow = arrows[a];
                 var start = VisibleRect(hwnd, out _);
                 Native.SendWinArrows(new[] { arrow });
@@ -101,7 +113,7 @@ internal static class WindowSnapper
                 if (snapAssist && a == arrows.Length - 1) break;
                 for (int i = 0; i < 20; i++) // ~300 ms
                 {
-                    if (Native.ClassOf(Native.GetForegroundWindow()) == "XamlExplorerHostIslandWindow")
+                    if (IsSnapAssist(Native.GetForegroundWindow()))
                     {
                         Native.SetForegroundWindow(hwnd);
                         break;
@@ -125,6 +137,19 @@ internal static class WindowSnapper
         Place(hwnd, work, zone, 0, remember: true);
     }
 
+    /// <summary>
+    /// Windows 11 shows Snap Assist in a XAML island, Windows 10 in the task view frame. Both belong to the shell
+    /// (Explorer), so any other Explorer window that takes focus right after a snap is treated as Snap Assist too.
+    /// </summary>
+    static bool IsSnapAssist(IntPtr fg)
+    {
+        if (fg == IntPtr.Zero) return false;
+        if (Native.ClassOf(fg) is "XamlExplorerHostIslandWindow" or "MultitaskingViewFrame") return true;
+        Native.GetWindowThreadProcessId(fg, out uint pid);
+        Native.GetWindowThreadProcessId(Native.GetShellWindow(), out uint shell);
+        return pid != 0 && pid == shell && Native.ClassOf(fg) is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "CabinetWClass" or "Progman" or "WorkerW");
+    }
+
     internal static bool Same(Native.RECT a, Native.RECT b) =>
         a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
 
@@ -146,7 +171,7 @@ internal static class WindowSnapper
     }
 
     /// <summary>The window's visible edges, without the invisible resize borders Win10/11 add around it.</summary>
-    static Native.RECT VisibleRect(IntPtr hwnd, out Native.RECT outer)
+    internal static Native.RECT VisibleRect(IntPtr hwnd, out Native.RECT outer)
     {
         Native.GetWindowRect(hwnd, out outer);
         if (Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_EXTENDED_FRAME_BOUNDS, out var visible,
@@ -158,7 +183,7 @@ internal static class WindowSnapper
     /// <summary>Moves and resizes the window into the zone. <paramref name="remember"/>: restore its size when dragged away.</summary>
     public static void Place(IntPtr hwnd, Native.RECT work, Zone zone, int gap, bool remember)
     {
-        _generation++; // any placement (auto-arrange too) supersedes a native snap still in progress
+        NextGeneration(hwnd); // any placement (auto-arrange too) supersedes a native snap of this window in progress
         if (!Native.IsWindow(hwnd)) return;
 
         if (Native.IsIconic(hwnd) || Native.IsZoomed(hwnd) || (remember && Native.IsWindowArranged(hwnd)))
@@ -175,6 +200,7 @@ internal static class WindowSnapper
 
         var t = TargetRect(work, zone, gap);
         Native.GetWindowRect(hwnd, out var before);
+        double beforeDpi = Native.DpiOf(hwnd); // before the move: it may land on a monitor with other scaling
 
         // Two passes: the first can change the window's DPI when crossing monitors, which alters its frame size.
         for (int pass = 0; pass < 2; pass++)
@@ -190,7 +216,7 @@ internal static class WindowSnapper
         if (remember)
         {
             Native.GetWindowRect(hwnd, out var after);
-            DragRestore.Remember(hwnd, before, after);
+            DragRestore.Remember(hwnd, before, beforeDpi, after);
         }
     }
 }
@@ -201,8 +227,9 @@ internal static class WindowSnapper
 /// </summary>
 internal static class DragRestore
 {
-    // hwnd -> size before the first snap, and the rect Windmill left it at. UI thread only.
-    static readonly Dictionary<IntPtr, (int W, int H, Native.RECT Applied)> Snapped = new();
+    // hwnd -> size before the first snap (physical pixels at that monitor's scale), and the rect Windmill left it at.
+    // UI thread only.
+    static readonly Dictionary<IntPtr, (int W, int H, double Dpi, Native.RECT Applied)> Snapped = new();
     static readonly Native.WinEventProc Proc = OnMoveSizeStart; // kept alive while hooked
     static IntPtr _hook;
 
@@ -218,42 +245,78 @@ internal static class DragRestore
         }
     }
 
-    public static void Remember(IntPtr hwnd, Native.RECT before, Native.RECT after)
+    public static void Remember(IntPtr hwnd, Native.RECT before, double beforeDpi, Native.RECT after)
     {
         if (!Enabled) return;
         foreach (var gone in new List<IntPtr>(Snapped.Keys))
             if (!Native.IsWindow(gone)) Snapped.Remove(gone);
 
         // Moving from one zone to another keeps the original size, as long as nobody resized it in between.
-        var size = Snapped.TryGetValue(hwnd, out var old) && WindowSnapper.Same(old.Applied, before)
-            ? (old.W, old.H) : (before.Width, before.Height);
-        Snapped[hwnd] = (size.Item1, size.Item2, after);
+        Snapped[hwnd] = Snapped.TryGetValue(hwnd, out var old) && WindowSnapper.Same(old.Applied, before)
+            ? old with { Applied = after }
+            : (before.Width, before.Height, beforeDpi, after);
+    }
+
+    static bool LeftButtonDown() => (Native.GetAsyncKeyState(0x01) & 0x8000) != 0; // VK_LBUTTON
+
+    static bool SizeUnchanged(IntPtr hwnd, Native.RECT applied, out Native.RECT cur)
+    {
+        // Size only: by the time we look, the drag may already have moved the window.
+        Native.GetWindowRect(hwnd, out cur);
+        return cur.Width == applied.Width && cur.Height == applied.Height && !Native.IsZoomed(hwnd);
     }
 
     static void OnMoveSizeStart(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
         if (idObject != 0 || !Snapped.TryGetValue(hwnd, out var s)) return;
-        Snapped.Remove(hwnd);
 
         // Resized, maximized or re-snapped by Windows since: its current size is what the user wants now.
-        // Size only: the event arrives asynchronously, after the drag has already moved the window a bit.
-        Native.GetWindowRect(hwnd, out var cur);
-        if (cur.Width != s.Applied.Width || cur.Height != s.Applied.Height || Native.IsZoomed(hwnd)) return;
+        if (!SizeUnchanged(hwnd, s.Applied, out _)) { Snapped.Remove(hwnd); return; }
 
         // This event also fires for resizing from an edge; only a title-bar drag restores.
-        Native.GetCursorPos(out var pt);
-        IntPtr lp = (IntPtr)((pt.Y << 16) | (pt.X & 0xFFFF));
+        Native.GetCursorPos(out var down);
+        IntPtr lp = (IntPtr)((down.Y << 16) | (down.X & 0xFFFF));
         if (Native.SendMessageTimeout(hwnd, Native.WM_NCHITTEST, IntPtr.Zero, lp, Native.SMTO_ABORTIFHUNG, 50, out var hit) == IntPtr.Zero
             || (int)hit != Native.HTCAPTION)
+        {
+            Snapped.Remove(hwnd);
             return;
+        }
 
-        // The running drag loop would size the window straight back, so end it, resize, and start a fresh drag
-        // (the button is still down, so it carries on seamlessly).
-        Native.SendMessageTimeout(hwnd, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero, Native.SMTO_ABORTIFHUNG, 50, out _);
-        // Keep the cursor at the same fraction across the title bar, like Windows does.
-        int x = pt.X - (int)((long)(pt.X - cur.Left) * s.W / Math.Max(1, cur.Width));
-        Native.SetWindowPos(hwnd, IntPtr.Zero, x, cur.Top, s.W, s.H, Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
-        if ((Native.GetAsyncKeyState(0x01) & 0x8000) != 0) // VK_LBUTTON
-            Native.PostMessage(hwnd, Native.WM_SYSCOMMAND, (IntPtr)Native.SC_DRAGMOVE, IntPtr.Zero);
+        // The move loop starts on the button press itself, so a plain click on the title bar lands here too.
+        // Keyboard moves (Alt+Space, M) have no button down and leave the window alone.
+        _ = RestoreOnceDraggedAsync(hwnd, down);
+    }
+
+    /// <summary>Restores the window's old size once the cursor moves past the drag threshold; a click does nothing.</summary>
+    static async Task RestoreOnceDraggedAsync(IntPtr hwnd, Native.POINT down)
+    {
+        int dx = Native.GetSystemMetrics(Native.SM_CXDRAG), dy = Native.GetSystemMetrics(Native.SM_CYDRAG);
+        while (LeftButtonDown())
+        {
+            Native.GetCursorPos(out var pt);
+            if (Math.Abs(pt.X - down.X) > dx || Math.Abs(pt.Y - down.Y) > dy)
+            {
+                // Remove first: the fresh drag below raises another move-size start.
+                if (!Snapped.Remove(hwnd, out var s) || !SizeUnchanged(hwnd, s.Applied, out var cur)) return;
+
+                // The running drag loop would size the window straight back, so end it, resize, and start a fresh
+                // drag (the button is still down, so it carries on seamlessly).
+                Native.SendMessageTimeout(hwnd, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero, Native.SMTO_ABORTIFHUNG, 50, out _);
+                // Same logical size as before, like Windows' own restore, even if it was snapped onto a monitor
+                // with different scaling.
+                double scale = Native.DpiOf(hwnd) / s.Dpi;
+                int w = (int)Math.Round(s.W * scale), h = (int)Math.Round(s.H * scale);
+                // Keep the cursor at the same fraction across the title bar, like Windows does.
+                int x = pt.X - (int)((long)(pt.X - cur.Left) * w / Math.Max(1, cur.Width));
+                Native.SetWindowPos(hwnd, IntPtr.Zero, x, cur.Top, w, h, Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+                if (LeftButtonDown())
+                    Native.PostMessage(hwnd, Native.WM_SYSCOMMAND, (IntPtr)Native.SC_DRAGMOVE, IntPtr.Zero);
+                return;
+            }
+            await Task.Delay(15);
+            if (!Native.IsWindow(hwnd)) return;
+        }
+        // Released without moving: just a click. The window stays in its zone and keeps its old size on record.
     }
 }
