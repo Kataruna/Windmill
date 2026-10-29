@@ -288,6 +288,19 @@ internal static class Native
 
     static bool _noIsWindowArranged; // remembered so polling loops don't throw on every call
 
+    /// <summary>
+    /// False on Windows 10 builds without IsWindowArranged. Native snap can't tell whether a snap worked there,
+    /// so it isn't attempted.
+    /// </summary>
+    public static bool CanDetectSnap { get; } =
+        NativeLibrary.TryLoad("user32.dll", out var user32) && NativeLibrary.TryGetExport(user32, "IsWindowArranged", out _);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetShellWindow();
+
+    /// <summary>Scale factor (1.0 = 96 dpi) of the monitor the window is on, which is what its pixel size follows.</summary>
+    public static double DpiOf(IntPtr hWnd) => GetDpiForMonitor(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST));
+
     public const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
     public const int WM_NCHITTEST = 0x0084;
     public const int HTCAPTION = 2;

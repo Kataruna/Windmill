@@ -72,6 +72,7 @@ internal static class Program
             Visible = true,
         };
         icon.DoubleClick += (_, _) => ShowSettings(controller);
+        controller.Warning += message => icon.ShowBalloonTip(8000, "Windmill", message, WF.ToolTipIcon.Warning);
 
         // Follow the taskbar when the Windows theme changes. The event can arrive on another thread.
         var ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
