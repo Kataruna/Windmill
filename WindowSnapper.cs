@@ -170,6 +170,8 @@ internal static class WindowSnapper
     /// <summary>
     /// Windows 11 shows Snap Assist in a XAML island, Windows 10 in the task view frame. Both belong to the shell
     /// (Explorer), so any other Explorer window that takes focus right after a snap is treated as Snap Assist too.
+    /// Except ForegroundStaging: Explorer passes focus through it ~100 ms before the panel shows, and an Esc
+    /// sent to it is lost.
     /// </summary>
     static bool IsSnapAssist(IntPtr fg)
     {
@@ -177,7 +179,7 @@ internal static class WindowSnapper
         if (Native.ClassOf(fg) is "XamlExplorerHostIslandWindow" or "MultitaskingViewFrame") return true;
         Native.GetWindowThreadProcessId(fg, out uint pid);
         Native.GetWindowThreadProcessId(Native.GetShellWindow(), out uint shell);
-        return pid != 0 && pid == shell && Native.ClassOf(fg) is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "CabinetWClass" or "Progman" or "WorkerW");
+        return pid != 0 && pid == shell && Native.ClassOf(fg) is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "CabinetWClass" or "Progman" or "WorkerW" or "ForegroundStaging");
     }
 
     internal static bool Same(Native.RECT a, Native.RECT b) =>
