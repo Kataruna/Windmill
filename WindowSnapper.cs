@@ -109,18 +109,9 @@ internal static class WindowSnapper
                 if (!Native.IsWindowArranged(hwnd)) { snapped = false; break; }
 
                 // Snap Assist (the "pick a window for the other side" panel) grabs focus right after a snap, which
-                // would swallow the next arrow. Taking focus back closes it. Left open after the last one if wanted.
+                // would swallow the next arrow. Left open after the last one if wanted.
                 if (snapAssist && a == arrows.Length - 1) break;
-                for (int i = 0; i < 20; i++) // ~300 ms
-                {
-                    if (IsSnapAssist(Native.GetForegroundWindow()))
-                    {
-                        Native.SetForegroundWindow(hwnd);
-                        break;
-                    }
-                    await Task.Delay(15);
-                    if (Superseded()) return;
-                }
+                if (!await DismissSnapAssistAsync(hwnd, Superseded)) return;
             }
             var target = TargetRect(work, zone, 0);
             for (int i = 0; snapped && i < 40; i++) // ~600 ms
@@ -138,8 +129,49 @@ internal static class WindowSnapper
     }
 
     /// <summary>
+    /// Waits for Snap Assist to open after a snap and closes it. It opens only after the snap animation, which can
+    /// take most of a second on a busy machine, so this waits up to ~1 s unless Snap Assist is off in Windows.
+    /// Returns false if a newer snap of the window started meanwhile.
+    /// </summary>
+    static async Task<bool> DismissSnapAssistAsync(IntPtr hwnd, Func<bool> superseded)
+    {
+        if (!WindowsSnapAssistOn()) return true;
+        for (int i = 0; i < 65; i++) // ~1 s
+        {
+            if (IsSnapAssist(Native.GetForegroundWindow()))
+            {
+                // Esc is how Snap Assist closes itself; just taking focus back can be refused by Windows, and
+                // then the panel stays. The input hook ignores injected keys, so this can't reach the menu.
+                Native.SendKey(Native.VK_ESCAPE);
+                for (int j = 0; j < 10 && IsSnapAssist(Native.GetForegroundWindow()); j++) // ~150 ms
+                {
+                    await Task.Delay(15);
+                    if (superseded()) return false;
+                }
+                if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
+                return true;
+            }
+            await Task.Delay(15);
+            if (superseded()) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Settings > System > Multitasking > Snap windows > "Show what I can snap next to it". Missing means on.
+    /// </summary>
+    static bool WindowsSnapAssistOn()
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
+        return key?.GetValue("SnapAssist") is not int on || on != 0;
+    }
+
+    /// <summary>
     /// Windows 11 shows Snap Assist in a XAML island, Windows 10 in the task view frame. Both belong to the shell
     /// (Explorer), so any other Explorer window that takes focus right after a snap is treated as Snap Assist too.
+    /// Except ForegroundStaging: Explorer passes focus through it ~100 ms before the panel shows, and an Esc
+    /// sent to it is lost.
     /// </summary>
     static bool IsSnapAssist(IntPtr fg)
     {
@@ -147,7 +179,7 @@ internal static class WindowSnapper
         if (Native.ClassOf(fg) is "XamlExplorerHostIslandWindow" or "MultitaskingViewFrame") return true;
         Native.GetWindowThreadProcessId(fg, out uint pid);
         Native.GetWindowThreadProcessId(Native.GetShellWindow(), out uint shell);
-        return pid != 0 && pid == shell && Native.ClassOf(fg) is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "CabinetWClass" or "Progman" or "WorkerW");
+        return pid != 0 && pid == shell && Native.ClassOf(fg) is not ("Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "CabinetWClass" or "Progman" or "WorkerW" or "ForegroundStaging");
     }
 
     internal static bool Same(Native.RECT a, Native.RECT b) =>

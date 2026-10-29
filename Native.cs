@@ -275,6 +275,18 @@ internal static class Native
         SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
     }
 
+    /// <summary>Presses and releases one key, as if typed.</summary>
+    public static void SendKey(ushort vk)
+    {
+        const uint KEYEVENTF_KEYUP = 0x2;
+        var inputs = new[]
+        {
+            new INPUT { type = 1, u = new InputUnion { ki = new KEYBDINPUT { wVk = vk } } },
+            new INPUT { type = 1, u = new InputUnion { ki = new KEYBDINPUT { wVk = vk, dwFlags = KEYEVENTF_KEYUP } } },
+        };
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
     [DllImport("user32.dll", EntryPoint = "IsWindowArranged")]
     static extern bool IsWindowArrangedImpl(IntPtr hWnd);
 
