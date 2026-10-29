@@ -254,6 +254,50 @@ internal static class Native
         SendInput(2, new[] { down, up }, Marshal.SizeOf<INPUT>());
     }
 
+    public const ushort VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28;
+
+    /// <summary>Hold Win, tap each arrow in turn, release Win; one SendInput call so nothing can interleave.</summary>
+    public static void SendWinArrows(ushort[] arrows)
+    {
+        const ushort VK_LWIN = 0x5B;
+        const uint KEYEVENTF_EXTENDEDKEY = 0x1, KEYEVENTF_KEYUP = 0x2;
+        static INPUT Key(ushort vk, uint flags) =>
+            new() { type = 1, u = new InputUnion { ki = new KEYBDINPUT { wVk = vk, dwFlags = KEYEVENTF_EXTENDEDKEY | flags } } };
+
+        var inputs = new System.Collections.Generic.List<INPUT> { Key(VK_LWIN, 0) };
+        foreach (var a in arrows) { inputs.Add(Key(a, 0)); inputs.Add(Key(a, KEYEVENTF_KEYUP)); }
+        inputs.Add(Key(VK_LWIN, KEYEVENTF_KEYUP));
+        SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
+    }
+
+    [DllImport("user32.dll", EntryPoint = "IsWindowArranged")]
+    static extern bool IsWindowArrangedImpl(IntPtr hWnd);
+
+    /// <summary>True when Windows itself has snapped the window.</summary>
+    public static bool IsWindowArranged(IntPtr hWnd)
+    {
+        try { return IsWindowArrangedImpl(hWnd); }
+        catch (EntryPointNotFoundException) { return false; } // older Windows 10
+    }
+
+    public const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
+    public const int WM_NCHITTEST = 0x0084;
+    public const int HTCAPTION = 2;
+    public const int WM_CANCELMODE = 0x001F;
+    public const int WM_SYSCOMMAND = 0x0112;
+    public const int SC_DRAGMOVE = 0xF012; // SC_MOVE + HTCAPTION: move as if the title bar were dragged
+
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    public delegate void WinEventProc(IntPtr hook, uint evt, IntPtr hWnd, int idObject, int idChild, uint thread, uint time);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr hMod, WinEventProc proc, uint pid, uint tid, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWinEvent(IntPtr hook);
+
     public static string ClassOf(IntPtr hWnd)
     {
         var sb = new System.Text.StringBuilder(256);

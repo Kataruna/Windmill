@@ -27,14 +27,24 @@ internal sealed class Settings
 
     public bool ArrangeEnabled { get; set; } = true;
 
+    public bool SnapEnabled { get; set; } = true;
+
     /// <summary>How long the trigger must be held, with no other key pressed, before the menu opens.</summary>
     public int HoldDelayMs { get; set; } = 180;
 
     /// <summary>Size of the radial menu, as a percentage of the default.</summary>
     public int RingSizePercent { get; set; } = 100;
 
+    /// <summary>Frosted-glass blur of the screen behind the radial ring and the zone panel.</summary>
+    public bool BlurBehindMenu { get; set; } = false;
+
     /// <summary>Pixels of space between snapped windows (and the screen edge).</summary>
     public int Gap { get; set; } = 0;
+
+    public SnapStyle SnapStyle { get; set; } = SnapStyle.Native;
+
+    /// <summary>Native style: leave Windows' Snap Assist open after a snap instead of closing it.</summary>
+    public bool ShowSnapAssist { get; set; } = false;
 
     public bool IncludeFancyZones { get; set; } = true;
 

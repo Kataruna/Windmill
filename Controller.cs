@@ -21,7 +21,7 @@ internal sealed class Controller : IDisposable
 
     Settings _settings = Settings.Load();
     List<Layout> _layouts = new();
-    int[][] _chord = Array.Empty<int[]>();   // one entry per required key; each lists its acceptable vk codes
+    int[][] _chord = Array.Empty<int[]>();   // one entry per required key; each lists its acceptable vk codes; empty when the snap menu is off
     int[][] _arrangeChord = Array.Empty<int[]>(); // empty when auto-arrange is turned off
     HashSet<int> _triggerVks = new();        // keys of both chords
     readonly HashSet<int> _held = new();
@@ -73,13 +73,17 @@ internal sealed class Controller : IDisposable
         _settings = Settings.Load();
         _layouts = Layouts.LoadAll(_settings);
         _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
-        _chord = _settings.TriggerKeys.Select(ParseTrigger).ToArray();
+        _chord = _settings.SnapEnabled
+            ? _settings.TriggerKeys.Select(ParseTrigger).ToArray()
+            : Array.Empty<int[]>();
         _arrangeChord = _settings.ArrangeEnabled
             ? _settings.ArrangeKeys.Select(ParseTrigger).ToArray()
             : Array.Empty<int[]>();
         _triggerVks = _chord.Concat(_arrangeChord).SelectMany(k => k).ToHashSet();
         _holdTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(0, _settings.HoldDelayMs));
         RadialMetrics.Scale = Math.Clamp(_settings.RingSizePercent, 50, 150) / 100.0;
+        DragRestore.Enabled = _settings.SnapStyle == SnapStyle.Native;
+        _overlay.Blur = _settings.BlurBehindMenu;
     }
 
     // Left/right variants share a name so "Alt" works on either side.
@@ -284,10 +288,12 @@ internal sealed class Controller : IDisposable
         var target = _target;
         var work = _monitor.rcWork;
         int gap = _settings.Gap;
+        var style = _settings.SnapStyle;
+        bool snapAssist = _settings.ShowSnapAssist;
         Close(snapped: zone != null);
         // Moving another process's window can block, so keep it out of the hook callback.
         if (zone != null)
-            _ui.BeginInvoke(() => WindowSnapper.Snap(target, work, zone, gap));
+            _ui.BeginInvoke(() => WindowSnapper.Snap(target, work, zone, gap, style, snapAssist));
     }
 
     void CommitArrange()
@@ -295,9 +301,10 @@ internal sealed class Controller : IDisposable
         var windows = _arrange is { } ar ? ar.Picked.Select(i => ar.Cards[i].Hwnd).ToList() : new List<IntPtr>();
         var work = _monitor.rcWork;
         int gap = _settings.Gap;
+        bool remember = _settings.SnapStyle == SnapStyle.Native;
         Close(snapped: windows.Count > 0);
         if (windows.Count > 0)
-            _ui.BeginInvoke(() => Arranger.Arrange(windows, work, gap));
+            _ui.BeginInvoke(() => Arranger.Arrange(windows, work, gap, remember));
     }
 
     void Cancel()
@@ -432,6 +439,7 @@ internal sealed class Controller : IDisposable
     public void Dispose()
     {
         _hook.Dispose();
+        DragRestore.Enabled = false;
         _overlay.Close();
     }
 }

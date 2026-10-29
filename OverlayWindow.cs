@@ -4,6 +4,8 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 
 namespace Windmill;
 
@@ -45,8 +47,12 @@ internal sealed class OverlayWindow : Window
             ex | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE);
     }
 
+    /// <summary>Frosted backdrop behind the ring and panel (Settings.BlurBehindMenu).</summary>
+    public bool Blur { get => _surface.Blur; set => _surface.Blur = value; }
+
     public void PlaceOn(Native.RECT monitor)
     {
+        _surface.ScreenOffset = new Point(monitor.Left, monitor.Top);
         if (!IsVisible) Show();
         Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, monitor.Left, monitor.Top, monitor.Width, monitor.Height,
             Native.SWP_NOACTIVATE);
@@ -70,6 +76,13 @@ internal sealed class OverlayWindow : Window
         const double HoverRate = 22, FollowRate = 18; // exponential approach speeds, 1/s
 
         public Action? Dismissed;
+        public bool Blur;
+        public Point ScreenOffset; // monitor's top-left on the virtual screen, for capturing what's behind the menu
+
+        // Blurred snapshot of the screen under the menu, taken when it opens or moves.
+        ImageSource? _backdrop;
+        Rect _backdropRect;
+        Point _backdropOrigin;
 
         OverlayState? _state;
         bool _shown, _closing, _snapped;
@@ -101,6 +114,7 @@ internal sealed class OverlayWindow : Window
 
         public void Present(OverlayState st)
         {
+            bool fresh = !_shown || _closing || (_state != null && Content(st) != Content(_state));
             if (!_shown || _closing)
             {
                 _shown = true;
@@ -118,8 +132,73 @@ internal sealed class OverlayWindow : Window
                 _elapsed = 0;
                 ResetItems(st);
             }
+            if (!Blur || st.Arrange != null) _backdrop = null;
+            else if (fresh || st.Origin != _backdropOrigin) CaptureBackdrop(st);
             _state = st;
             InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Windows can only blur a whole rectangular window, so instead snapshot the screen behind the menu once,
+        /// blur it, and draw it clipped to the menu's shape. Our own overlay is layered, so the plain screen copy skips it.
+        /// </summary>
+        void CaptureBackdrop(OverlayState st)
+        {
+            _backdropOrigin = st.Origin;
+            double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            Rect area;
+            if (st.Layout.Radial)
+            {
+                double r = RadialMetrics.Outer * s * 1.15 + 24 * s; // room for the open/close overshoot and blur edge
+                area = new Rect(st.Origin.X - r, st.Origin.Y - r, 2 * r, 2 * r);
+            }
+            else
+            {
+                area = st.Panel;
+                area.Inflate(8 * s, 8 * s);
+                area.Transform(new ScaleTransform(1.15, 1.15, st.Origin.X, st.Origin.Y).Value);
+                area.Inflate(24 * s, 24 * s);
+            }
+            area.Intersect(new Rect(0, 0, ActualWidth * s, ActualHeight * s));
+            if (area.IsEmpty || area.Width < 1 || area.Height < 1) { _backdrop = null; return; }
+
+            const int Down = 4; // blur a quarter-size copy: much cheaper, and scaling it back up softens it further
+            int w = (int)area.Width, h = (int)area.Height;
+            try
+            {
+                using var shot = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                using (var g = System.Drawing.Graphics.FromImage(shot))
+                    g.CopyFromScreen((int)(ScreenOffset.X + area.X), (int)(ScreenOffset.Y + area.Y), 0, 0, new System.Drawing.Size(w, h));
+                int sw = Math.Max(1, w / Down), sh = Math.Max(1, h / Down);
+                using var small = new System.Drawing.Bitmap(shot, sw, sh);
+                var data = small.LockBits(new System.Drawing.Rectangle(0, 0, sw, sh),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                BitmapSource src;
+                try { src = BitmapSource.Create(sw, sh, 96, 96, PixelFormats.Bgr32, null, data.Scan0, data.Stride * sh, data.Stride); }
+                finally { small.UnlockBits(data); }
+
+                var img = new System.Windows.Controls.Image { Source = src, Effect = new BlurEffect { Radius = 8 } };
+                img.Measure(new Size(sw, sh));
+                img.Arrange(new Rect(0, 0, sw, sh));
+                var blurred = new RenderTargetBitmap(sw, sh, 96, 96, PixelFormats.Pbgra32);
+                blurred.Render(img);
+                blurred.Freeze();
+                _backdrop = blurred;
+                _backdropRect = area;
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or ArgumentException or System.Runtime.InteropServices.ExternalException)
+            {
+                _backdrop = null; // e.g. the secure desktop is up; just draw without blur
+            }
+        }
+
+        /// <summary>Draws the blurred snapshot inside <paramref name="clip"/> (unscaled, so the background doesn't shift).</summary>
+        void DrawBackdrop(DrawingContext dc, Geometry clip)
+        {
+            if (_backdrop == null) return;
+            dc.PushClip(clip);
+            dc.DrawImage(_backdrop, _backdropRect);
+            dc.Pop();
         }
 
         /// <summary>What the menu is showing; a change re-runs the entrance cascade.</summary>
@@ -281,6 +360,7 @@ internal sealed class OverlayWindow : Window
             double ring = RadialMetrics.RingStart * s, outer = RadialMetrics.Outer * s;
             var o = st.Origin;
 
+            DrawBackdrop(dc, new EllipseGeometry(o, outer * MenuScale, outer * MenuScale));
             dc.PushTransform(new ScaleTransform(MenuScale, MenuScale, o.X, o.Y));
 
             // Soft shadow so the ring reads on any wallpaper.
@@ -295,7 +375,7 @@ internal sealed class OverlayWindow : Window
             };
             dc.DrawEllipse(shadow, null, o, outer + 36 * s, outer + 36 * s);
 
-            var bg = Color.FromArgb(225, 28, 28, 34);
+            var bg = Color.FromArgb(PanelAlpha, 28, 28, 34);
             var iconIdle = Color.FromArgb(70, 255, 255, 255);
             var lineIdle = Color.FromArgb(150, 255, 255, 255);
             var edge = new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s);
@@ -304,8 +384,19 @@ internal sealed class OverlayWindow : Window
             dc.DrawEllipse(null, new Pen(Brush(Color.FromArgb(70, 255, 255, 255)), 1.5 * s), o, inner - 4 * s, inner - 4 * s);
             dc.DrawEllipse(Brush(Color.FromArgb((byte)(140 * (1 - _needleAlpha)), 255, 255, 255)), null, o, 3 * s, 3 * s);
             if (_needleAlpha > 0.01)
-                dc.DrawGeometry(Brush(WithAlpha(accent, (byte)(230 * _needleAlpha))), null,
-                    Wedge(o, inner - 7 * s, inner - 1 * s, _needleAngle - 18, _needleAngle + 18));
+            {
+                // Arc stroked with round caps; the caps add a little length, so the arc itself is a bit shorter.
+                double nr = inner - 4 * s;
+                var needle = new StreamGeometry();
+                using (var ctx = needle.Open())
+                {
+                    ctx.BeginFigure(Polar(o, nr, _needleAngle - 15), false, false);
+                    ctx.ArcTo(Polar(o, nr, _needleAngle + 15), new Size(nr, nr), 0, false, SweepDirection.Counterclockwise, true, false);
+                }
+                needle.Freeze();
+                dc.DrawGeometry(null, new Pen(Brush(WithAlpha(accent, (byte)(230 * _needleAlpha))), 6 * s)
+                    { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, needle);
+            }
 
             int n = 0;
             for (int i = 0; i < st.Layout.Zones.Count; i++)
@@ -349,11 +440,14 @@ internal sealed class OverlayWindow : Window
             DrawPreview(dc, s, accent);
 
             var o = st.Origin;
-            dc.PushTransform(new ScaleTransform(MenuScale, MenuScale, o.X, o.Y));
-
             var frame = st.Panel;
             frame.Inflate(8 * s, 8 * s);
-            DrawPanel(dc, frame, s);
+
+            var scaled = frame;
+            scaled.Transform(new ScaleTransform(MenuScale, MenuScale, o.X, o.Y).Value);
+            DrawBackdrop(dc, new RectangleGeometry(scaled, PanelRadius * s * MenuScale, PanelRadius * s * MenuScale));
+            dc.PushTransform(new ScaleTransform(MenuScale, MenuScale, o.X, o.Y));
+            DrawPanel(dc, frame, s, PanelAlpha);
 
             var idle = Color.FromArgb(34, 255, 255, 255);
             var idleLine = Color.FromArgb(70, 255, 255, 255);
@@ -543,9 +637,14 @@ internal sealed class OverlayWindow : Window
         }
 
         /// <summary>Dark rounded panel with a soft drop shadow, shared by the menus.</summary>
-        static void DrawPanel(DrawingContext dc, Rect frame, double s)
+        const double PanelRadius = 14;
+
+        /// <summary>Menu background opacity; see-through enough to show the blur when it's on.</summary>
+        byte PanelAlpha => _backdrop != null ? (byte)165 : (byte)225;
+
+        static void DrawPanel(DrawingContext dc, Rect frame, double s, byte alpha = 225)
         {
-            double radius = 14 * s;
+            double radius = PanelRadius * s;
             for (int i = 3; i >= 1; i--)
             {
                 var sh = frame;
@@ -553,7 +652,7 @@ internal sealed class OverlayWindow : Window
                 sh.Offset(0, 3 * i * s);
                 dc.DrawRoundedRectangle(Brush(Color.FromArgb(26, 0, 0, 0)), null, sh, radius + 4 * i * s, radius + 4 * i * s);
             }
-            dc.DrawRoundedRectangle(Brush(Color.FromArgb(225, 28, 28, 34)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
+            dc.DrawRoundedRectangle(Brush(Color.FromArgb(alpha, 28, 28, 34)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
                 frame, radius, radius);
         }
 

@@ -56,6 +56,22 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Snap menu"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Hold the shortcut over a window to open the snap menu. Turn off to use only auto-arrange."/>
+                        </StackPanel>
+                        <CheckBox x:Name="SnapBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"
+                                  Checked="OnSnapToggled" Unchecked="OnSnapToggled"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource CardTitle}" Text="Shortcut"/>
                             <TextBlock x:Name="ShortcutCaption" Style="{StaticResource CardCaption}"
                                        Text="Keys to hold together. Select, then press the combination you want."/>
@@ -177,7 +193,57 @@
                     </Grid>
                 </Border>
 
+                <TextBlock Style="{StaticResource SectionHeader}" Text="Appearance"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Blur behind menu"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Frosted glass behind the snap ring and zone panel. It's a snapshot taken when the menu opens, so video behind it pauses until the menu closes."/>
+                        </StackPanel>
+                        <CheckBox x:Name="BlurBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+
                 <TextBlock Style="{StaticResource SectionHeader}" Text="Windows"/>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Snap style"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Native: halves and quarters use real Windows snap (needs gap 0), and every snapped window returns to its old size when dragged away. Classic: just move and resize."/>
+                        </StackPanel>
+                        <ComboBox x:Name="SnapModeBox" Grid.Column="1" MinWidth="140" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <ComboBoxItem Content="Native"/>
+                            <ComboBoxItem Content="Classic"/>
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Snap Assist"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Native style only. Keep Windows' panel for picking a window for the other side open after a snap. Off by default because it takes focus and can feel jumpy."/>
+                        </StackPanel>
+                        <CheckBox x:Name="SnapAssistBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
 
                 <Border Style="{StaticResource Card}">
                     <Grid>

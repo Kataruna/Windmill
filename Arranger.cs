@@ -240,11 +240,13 @@ internal static class Arranger
         return portrait ? slots.Select(r => new NRect(r.Y, r.X, r.H, r.W)).ToArray() : slots;
     }
 
-    public static void Arrange(IReadOnlyList<IntPtr> windows, Native.RECT work, int gap)
+    /// <param name="remember">Restore each window's size when it is dragged away (Native snap style).</param>
+    public static void Arrange(IReadOnlyList<IntPtr> windows, Native.RECT work, int gap, bool remember)
     {
         var slots = Slots(windows.Count, work.Height > work.Width);
         for (int i = 0; i < windows.Count; i++)
-            WindowSnapper.Snap(windows[i], work, new Zone(slots[i], Maximize: windows.Count == 1), gap);
+            // Always move and resize: real Windows snap of several windows in a row fights its own Snap Assist.
+            WindowSnapper.Place(windows[i], work, new Zone(slots[i], Maximize: windows.Count == 1), gap, remember);
 
         // Bring them all forward, first pick on top.
         for (int i = windows.Count - 1; i >= 0; i--)

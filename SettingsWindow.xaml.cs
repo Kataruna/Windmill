@@ -29,6 +29,8 @@ public partial class SettingsWindow : Window
         _arrangeKeys = s.ArrangeKeys;
         ShortcutButton.Content = Describe(_triggerKeys);
         ArrangeButton.Content = Describe(_arrangeKeys);
+        SnapBox.IsChecked = s.SnapEnabled;
+        ShortcutButton.IsEnabled = SnapStyleBox.IsEnabled = s.SnapEnabled;
         ArrangeBox.IsChecked = s.ArrangeEnabled;
         ArrangeButton.IsEnabled = s.ArrangeEnabled;
         ArrangeStyleBox.IsEnabled = s.ArrangeEnabled;
@@ -43,6 +45,10 @@ public partial class SettingsWindow : Window
             StatusText.Text = "Ring size applied. Save to keep it.";
         };
         GapSlider.Value = s.Gap;
+        BlurBox.IsChecked = s.BlurBehindMenu;
+        SnapModeBox.SelectedIndex = (int)s.SnapStyle;
+        SnapAssistBox.IsChecked = s.ShowSnapAssist;
+        SnapAssistBox.Checked += OnSnapAssistChecked; // after loading, so the saved value doesn't trigger the warning
         FancyZonesBox.IsChecked = s.IncludeFancyZones;
         StartupBox.IsChecked = Startup.IsEnabled;
         LayoutsCaption.Text = controller.LayoutSummary;
@@ -58,6 +64,25 @@ public partial class SettingsWindow : Window
     }
 
     static string Describe(string[] keys) => string.Join(" + ", keys);
+
+    void OnSnapToggled(object sender, RoutedEventArgs e)
+    {
+        if (ShortcutButton == null) return; // fired while the XAML is still loading
+        if (SnapBox.IsChecked != true && _recordingFor == ShortcutButton) StopRecording(commit: false);
+        ShortcutButton.IsEnabled = SnapStyleBox.IsEnabled = SnapBox.IsChecked == true;
+    }
+
+    void OnSnapAssistChecked(object sender, RoutedEventArgs e)
+    {
+        var answer = MessageBox.Show(this,
+            "Windows Snap Assist is not controlled by Windmill.\n\n" +
+            "After each snap it opens a panel that takes keyboard focus from your window, and it may cover " +
+            "part of the screen until you pick a window or press Esc. This can make snapping feel jumpy or " +
+            "inconsistent, and Windmill can't guarantee how it behaves across Windows updates.\n\n" +
+            "Enable Snap Assist anyway?",
+            "Enable Snap Assist", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+        if (answer != MessageBoxResult.OK) SnapAssistBox.IsChecked = false;
+    }
 
     void OnArrangeToggled(object sender, RoutedEventArgs e)
     {
@@ -155,12 +180,16 @@ public partial class SettingsWindow : Window
         {
             TriggerKeys = _triggerKeys,
             ArrangeKeys = _arrangeKeys,
+            SnapEnabled = SnapBox.IsChecked == true,
             ArrangeEnabled = ArrangeBox.IsChecked == true,
             SnapActivation = (ActivationStyle)Math.Max(0, SnapStyleBox.SelectedIndex),
             ArrangeActivation = (ActivationStyle)Math.Max(0, ArrangeStyleBox.SelectedIndex),
             HoldDelayMs = (int)DelaySlider.Value,
             RingSizePercent = (int)RingSizeSlider.Value,
+            BlurBehindMenu = BlurBox.IsChecked == true,
             Gap = (int)GapSlider.Value,
+            SnapStyle = (SnapStyle)Math.Max(0, SnapModeBox.SelectedIndex),
+            ShowSnapAssist = SnapAssistBox.IsChecked == true,
             IncludeFancyZones = FancyZonesBox.IsChecked == true,
         };
 
