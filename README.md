@@ -36,6 +36,8 @@ Windmill is an independent project. It isn't affiliated with or endorsed by Loop
 | Confirm | Release the shortcut (Toggle: click, Enter or the shortcut again) | Release the shortcut (Toggle: Enter or the shortcut again) |
 | Cancel | **Esc** | **Esc** |
 
+With a touchscreen or pen, once a menu is open you can point at a zone or tap a window card with your finger. In Toggle mode, lifting your finger snaps to the zone under it.
+
 Pressing another key before the menu appears cancels it, so normal shortcuts like Alt+Tab or Alt+F4 keep working. If quick shortcuts still open the menu, raise **Hold delay** in Settings.
 
 ## Settings

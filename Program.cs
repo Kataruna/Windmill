@@ -16,6 +16,10 @@ internal static class Program
         using var mutex = new Mutex(true, "Windmill.SingleInstance", out bool first);
         if (!first) return;
 
+        // The overlay reads touch and pen itself (WM_POINTER*); WPF's own stylus stack could take those messages first.
+        // The settings window still works by touch, as plain mouse input.
+        AppContext.SetSwitch("Switch.System.Windows.Input.Stylus.DisableStylusAndTouchSupport", true);
+
         var app = new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
 
         Controller controller;

@@ -23,11 +23,22 @@ internal sealed class OverlayState
     public Rect Work;
 }
 
-/// <summary>Borderless, click-through, never-activated window that covers one monitor.</summary>
+/// <summary>Where a finger or pen is on an open menu.</summary>
+internal enum TouchPhase { Down, Move, Up }
+
+/// <summary>
+/// Borderless, never-activated window that covers one monitor. Click-through, except that it catches touch and pen
+/// while a menu is open (<see cref="Interactive"/>).
+/// </summary>
 internal sealed class OverlayWindow : Window
 {
     readonly Surface _surface = new();
     readonly IntPtr _hwnd;
+    // Fully transparent pixels of a layered window let input through, so the whole monitor gets a barely-there tint.
+    static readonly Brush Catcher = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+
+    /// <summary>The primary touch or pen contact, in physical screen pixels. Mouse input still comes from the hook.</summary>
+    public Action<TouchPhase, Point>? Touch;
 
     public OverlayWindow()
     {
@@ -45,6 +56,50 @@ internal sealed class OverlayWindow : Window
         int ex = Native.GetWindowLong(_hwnd, Native.GWL_EXSTYLE);
         Native.SetWindowLong(_hwnd, Native.GWL_EXSTYLE,
             ex | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE);
+        HwndSource.FromHwnd(_hwnd).AddHook(WndProc);
+    }
+
+    /// <summary>
+    /// Catches touch and pen while a menu is open; otherwise they'd go to the app underneath, which often keeps them
+    /// to itself (scrolling, say), so the cursor never follows the finger. Must be off again whenever no menu is open,
+    /// or this full-screen topmost window would swallow every touch and click.
+    /// </summary>
+    public bool Interactive
+    {
+        get => (Native.GetWindowLong(_hwnd, Native.GWL_EXSTYLE) & Native.WS_EX_TRANSPARENT) == 0;
+        set
+        {
+            if (value == Interactive) return;
+            int ex = Native.GetWindowLong(_hwnd, Native.GWL_EXSTYLE);
+            Native.SetWindowLong(_hwnd, Native.GWL_EXSTYLE,
+                value ? ex & ~Native.WS_EX_TRANSPARENT : ex | Native.WS_EX_TRANSPARENT);
+            Background = value ? Catcher : Brushes.Transparent;
+        }
+    }
+
+    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case Native.WM_POINTERACTIVATE:
+                handled = true;
+                return (IntPtr)Native.PA_NOACTIVATE;
+            case Native.WM_POINTERDOWN or Native.WM_POINTERUPDATE or Native.WM_POINTERUP:
+                // Handled, so Windows doesn't also turn it into a mouse click.
+                handled = true;
+                int flags = (int)(((long)wParam >> 16) & 0xFFFF);
+                if ((flags & Native.POINTER_FLAG_PRIMARY) == 0) break; // a second finger
+                if (msg == Native.WM_POINTERUPDATE && (flags & Native.POINTER_FLAG_INCONTACT) == 0) break; // pen hovering
+                var at = new Point((short)((long)lParam & 0xFFFF), (short)(((long)lParam >> 16) & 0xFFFF));
+                Touch?.Invoke(msg switch
+                {
+                    Native.WM_POINTERDOWN => TouchPhase.Down,
+                    Native.WM_POINTERUP => TouchPhase.Up,
+                    _ => TouchPhase.Move,
+                }, at);
+                break;
+        }
+        return IntPtr.Zero;
     }
 
     /// <summary>Frosted backdrop behind the ring and panel (Settings.BlurBehindMenu).</summary>
@@ -63,6 +118,7 @@ internal sealed class OverlayWindow : Window
     /// <summary>Plays the closing animation, then hides. <paramref name="snapped"/> picks a "confirm" or "cancel" exit.</summary>
     public void Dismiss(bool snapped)
     {
+        Interactive = false; // now, not after the closing animation
         if (IsVisible) _surface.Dismiss(snapped);
     }
 

@@ -79,7 +79,9 @@ internal sealed class InputHook : IDisposable
             if (Wheel?.Invoke(delta) == true)
                 return (IntPtr)1;
         }
-        else if (code >= 0 && (int)wParam is Native.WM_LBUTTONDOWN or Native.WM_LBUTTONUP)
+        else if (code >= 0 && (int)wParam is Native.WM_LBUTTONDOWN or Native.WM_LBUTTONUP
+            // A tap on the menu reaches the overlay as touch (Controller.OnTouch); don't count it twice.
+            && !Native.FromTouchOrPen(Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam).dwExtraInfo))
         {
             if (Click?.Invoke((int)wParam == Native.WM_LBUTTONDOWN) == true)
                 return (IntPtr)1;

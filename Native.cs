@@ -15,6 +15,12 @@ internal static class Native
     public const int WM_MOUSEWHEEL = 0x020A;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_LBUTTONUP = 0x0202;
+    public const int WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247;
+    public const int WM_POINTERACTIVATE = 0x024B, PA_NOACTIVATE = 3;
+    public const int POINTER_FLAG_INCONTACT = 0x4, POINTER_FLAG_PRIMARY = 0x2000;
+
+    /// <summary>Mouse input that Windows made up from a touch or pen contact carries this in its extra info.</summary>
+    public static bool FromTouchOrPen(IntPtr extraInfo) => ((long)extraInfo & 0xFFFFFF00) == 0xFF515700;
     public const int WM_GETICON = 0x007F;
     public const int ICON_BIG = 1;
     public const int ICON_SMALL2 = 2;

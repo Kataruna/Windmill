@@ -40,6 +40,8 @@ internal sealed class Controller : IDisposable
     Point _origin;      // menu centre (cursor when it opened), physical screen pixels
     Rect _panel;        // miniature zone map, physical screen pixels
     bool _moved;        // cursor has left the dead zone since the menu appeared
+    Point? _touch;      // last finger/pen point on the menu; stands in for the cursor until the mouse moves
+    Native.POINT _cursorAtTouch;
     int _selected = -1;
 
     public bool Enabled { get; set; } = true;
@@ -66,6 +68,7 @@ internal sealed class Controller : IDisposable
         _hook.Key = OnKey;
         _hook.Wheel = OnWheel;
         _hook.Click = OnClick;
+        _overlay.Touch = OnTouch;
         _hook.MouseHookFailed = error =>
         {
             if (_warnedMouseHook) return; // retried on every open; say it once
@@ -238,6 +241,31 @@ internal sealed class Controller : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// A finger or pen on the open menu points like the cursor does. Hold: releasing the shortcut snaps, as with the
+    /// mouse. Toggle: lifting snaps to the zone under the finger (or closes). Auto-arrange: a tap picks a window.
+    /// </summary>
+    void OnTouch(TouchPhase phase, Point at)
+    {
+        if (_state != State.Active) return;
+        _touch = at;
+        Native.GetCursorPos(out _cursorAtTouch);
+        Update();
+        if (phase != TouchPhase.Up) return;
+        if (_mode == Mode.Arrange) TogglePick();
+        else if (Toggle) Commit();
+    }
+
+    /// <summary>Where the user is pointing: the last touch, unless the mouse has moved since.</summary>
+    Native.POINT Pointer()
+    {
+        Native.GetCursorPos(out var pt);
+        if (_touch is { } t && pt.X == _cursorAtTouch.X && pt.Y == _cursorAtTouch.Y)
+            return new Native.POINT { X = (int)t.X, Y = (int)t.Y };
+        _touch = null;
+        return pt;
+    }
+
     // ---- state transitions ----
 
     void Activate()
@@ -277,10 +305,12 @@ internal sealed class Controller : IDisposable
     void Begin()
     {
         _selected = -1;
+        _touch = null;
         _state = State.Active;
         _shortcutReleased = !_held.Overlaps(_triggerVks); // already true when a toggle tap opened it
         Update();
         _hook.MouseEnabled = true;
+        _overlay.Interactive = true;
         _pollTimer.Start();
         MaskModifiers();
     }
@@ -291,7 +321,7 @@ internal sealed class Controller : IDisposable
     void TogglePick()
     {
         if (_state != State.Active || _arrange is not { } ar) return;
-        Native.GetCursorPos(out var pt);
+        var pt = Pointer();
         int i = ar.HitTest(new Point(pt.X - _monitor.rcMonitor.Left, pt.Y - _monitor.rcMonitor.Top));
         if (i < 0) return;
         if (!ar.Picked.Remove(i) && ar.Picked.Count < Arranger.MaxWindows) ar.Picked.Add(i);
@@ -356,7 +386,7 @@ internal sealed class Controller : IDisposable
         _layoutIndex = (_layoutIndex + step + _layouts.Count) % _layouts.Count;
         _selected = -1;
         // Re-centre the menu under the cursor.
-        Native.GetCursorPos(out var pt);
+        var pt = Pointer();
         _origin = new Point(pt.X, pt.Y);
         _moved = false;
         PlacePanel();
@@ -390,7 +420,7 @@ internal sealed class Controller : IDisposable
     {
         if (_state != State.Active) return;
         var layout = _layouts[_layoutIndex];
-        Native.GetCursorPos(out var pt);
+        var pt = Pointer();
 
         // Every menu stays on the monitor it opened on.
         var mon = _monitor.rcMonitor;
