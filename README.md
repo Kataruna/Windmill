@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="Windmill-white.svg">
-    <img src="Windmill.svg" alt="Windmill logo" width="128">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/Windmill-white.svg">
+    <img src="assets/Windmill.svg" alt="Windmill logo" width="128">
   </picture>
 </p>
 
@@ -86,9 +86,25 @@ To also build the installer:
 ISCC installer\Windmill.iss
 ```
 
-This produces `dist\WindmillSetup-<version>.exe`. The version comes from `<Version>` in `Windmill.csproj`.
+This produces `dist\WindmillSetup-<version>.exe`. The version comes from `<Version>` in `src/Windmill/Windmill.csproj`.
 
-For development, `dotnet build` and `dotnet run` also work.
+For development, `dotnet build` works from the repo root, and `dotnet run --project src/Windmill` starts the app.
+
+### Project structure
+
+```
+Windmill.sln
+src/Windmill/
+  Program.cs        entry point and tray icon
+  Core/             shortcut handling, input hooks, settings, start with Windows
+  Snapping/         layouts, snapping, drag-restore, auto-arrange
+  UI/               menu overlay, settings window, logo
+  Interop/          Win32 declarations
+  Assets/           app icon
+  Properties/       publish profile
+assets/             logo SVGs
+installer/          Inno Setup script
+```
 
 ## Limitations
 

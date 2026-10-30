@@ -11,8 +11,8 @@
     <Version>1.0.0</Version>
     <RootNamespace>Windmill</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- Colour logo for the exe, Explorer, Alt+Tab and windows; generated from Windmill.svg. -->
-    <ApplicationIcon>Windmill.ico</ApplicationIcon>
+    <!-- Colour logo for the exe, Explorer, Alt+Tab and windows; generated from assets/Windmill.svg at the repo root. -->
+    <ApplicationIcon>Assets\Windmill.ico</ApplicationIcon>
     <!-- Window.ThemeMode (Fluent theme) is experimental in .NET 9.
          WFO0003 wants DPI awareness set from WinForms code instead, but this is a WPF app that needs it in app.manifest. -->
     <NoWarn>$(NoWarn);WPF0001;WFO0003</NoWarn>

@@ -3,7 +3,7 @@ using SD2 = System.Drawing.Drawing2D;
 
 namespace Windmill;
 
-/// <summary>The app logo from Windmill.svg: one petal shape drawn four times, rotated a quarter turn each.</summary>
+/// <summary>The app logo from assets/Windmill.svg: one petal shape drawn four times, rotated a quarter turn each.</summary>
 internal static class Logo
 {
     // Each petal's colour and its transform from the SVG (matrix a, b, c, d, e, f), on a 1024-unit canvas.

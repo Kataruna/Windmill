@@ -7,7 +7,7 @@
 #if !FileExists(AppExe)
   #error dist\Windmill.exe not found. Run "dotnet publish -p:PublishProfile=dist" first.
 #endif
-; Major.minor.patch from the exe, which gets it from <Version> in Windmill.csproj.
+; Major.minor.patch from the exe, which gets it from <Version> in src\Windmill\Windmill.csproj.
 #define FullVersion GetVersionNumbersString(AppExe)
 #define AppVersion Copy(FullVersion, 1, RPos(".", FullVersion) - 1)
 
@@ -29,7 +29,7 @@ DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-SetupIconFile=..\Windmill.ico
+SetupIconFile=..\src\Windmill\Assets\Windmill.ico
 UninstallDisplayIcon={app}\Windmill.exe
 UninstallDisplayName=Windmill
 WizardStyle=modern
