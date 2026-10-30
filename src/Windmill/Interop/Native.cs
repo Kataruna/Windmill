@@ -42,6 +42,7 @@ internal static class Native
     public const int WS_EX_TRANSPARENT = 0x20;
     public const int WS_EX_TOOLWINDOW = 0x80;
     public const int WS_EX_NOACTIVATE = 0x08000000;
+    public const int WS_EX_TOPMOST = 0x8;
 
     public const int SW_RESTORE = 9;
     public const int SW_MAXIMIZE = 3;
@@ -52,6 +53,7 @@ internal static class Native
     public const uint SWP_NOACTIVATE = 0x0010;
 
     public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_NOTOPMOST = new(-2);
 
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     public const uint MONITOR_DEFAULTTONEAREST = 2;
@@ -127,6 +129,12 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+
+    /// <summary>Like ShowWindow, but doesn't wait for the window's thread, so a hung app can't block us.</summary>
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int cmd);
+
+    public const int SW_SHOWMINNOACTIVE = 7;
 
     [DllImport("user32.dll")]
     public static extern bool IsZoomed(IntPtr hWnd);
@@ -342,5 +350,35 @@ internal static class Native
         var sb = new System.Text.StringBuilder(256);
         GetClassName(hWnd, sb, sb.Capacity);
         return sb.ToString();
+    }
+
+    [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IVirtualDesktopManager
+    {
+        [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow, out bool onCurrentDesktop);
+        [PreserveSig] int GetWindowDesktopId(IntPtr topLevelWindow, out Guid desktopId);
+        [PreserveSig] int MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
+    }
+
+    [ComImport, Guid("aa509086-5ca9-4c25-8f95-589d3c07b48a")]
+    class VirtualDesktopManager { }
+
+    static IVirtualDesktopManager? _desktops;
+    static bool _noDesktops;
+
+    /// <summary>True unless the window is known to be on another virtual desktop. Minimized windows count too.</summary>
+    public static bool OnCurrentDesktop(IntPtr hWnd)
+    {
+        if (_noDesktops) return true;
+        try
+        {
+            _desktops ??= (IVirtualDesktopManager)new VirtualDesktopManager();
+            return _desktops.IsWindowOnCurrentVirtualDesktop(hWnd, out bool on) != 0 || on;
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
+        {
+            _noDesktops = true; // e.g. Explorer isn't running
+            return true;
+        }
     }
 }

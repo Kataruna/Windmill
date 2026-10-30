@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>Windmill</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <RootNamespace>Windmill</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Colour logo for the exe, Explorer, Alt+Tab and windows; generated from assets/Windmill.svg at the repo root. -->

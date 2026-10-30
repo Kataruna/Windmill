@@ -50,7 +50,10 @@ public partial class SettingsWindow : Window
         SnapAssistBox.IsChecked = s.ShowSnapAssist;
         SnapAssistBox.Checked += OnSnapAssistChecked; // after loading, so the saved value doesn't trigger the warning
         FancyZonesBox.IsChecked = s.IncludeFancyZones;
+        KomorebiBox.IsChecked = s.KomorebiIntegration;
         StartupBox.IsChecked = Startup.IsEnabled;
+        UpdatesBox.IsChecked = s.CheckForUpdates;
+        UpdatesCaption.Text = $"Get a notification when a new version is out. This is version {Updater.Current}.";
         LayoutsCaption.Text = controller.LayoutSummary;
 
         PreviewKeyDown += OnPreviewKeyDown;
@@ -191,6 +194,8 @@ public partial class SettingsWindow : Window
             SnapStyle = (SnapStyle)Math.Max(0, SnapModeBox.SelectedIndex),
             ShowSnapAssist = SnapAssistBox.IsChecked == true,
             IncludeFancyZones = FancyZonesBox.IsChecked == true,
+            KomorebiIntegration = KomorebiBox.IsChecked == true,
+            CheckForUpdates = UpdatesBox.IsChecked == true,
         };
 
         try

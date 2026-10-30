@@ -41,24 +41,34 @@ internal sealed class ArrangeView
 internal static class Arranger
 {
     public const int MaxWindows = 6;
-    public const double CardWidth = 220; // at 96 dpi; snapshots are captured at about twice this
+    public const double CardWidth = 220; // at 96 dpi; snapshots are captured at this size in physical pixels
 
     // Last snapshot of each window, shown immediately next time while a fresh one is captured. UI thread only.
     static readonly Dictionary<IntPtr, ImageSource> ThumbCache = new();
 
-    /// <summary>Visible, non-minimized top-level app windows, front-most first.</summary>
-    public static List<ArrangeCard> FindWindows()
+    /// <summary>
+    /// Visible, non-minimized top-level app windows, front-most first. Given a monitor, only the windows on it and on
+    /// the current virtual desktop, minimized ones included, except those in <paramref name="skip"/>.
+    /// </summary>
+    public static List<ArrangeCard> FindWindows(IntPtr monitor = default, IReadOnlySet<long>? skip = null)
     {
         var result = new List<ArrangeCard>();
         uint self = (uint)Environment.ProcessId;
         Native.EnumWindows((h, _) =>
         {
-            if (IsCandidate(h, self))
+            if (IsCandidate(h, self, includeMinimized: monitor != IntPtr.Zero)
+                && (monitor == IntPtr.Zero || (Native.MonitorFromWindow(h, Native.MONITOR_DEFAULTTONEAREST) == monitor
+                                               && Native.OnCurrentDesktop(h) && skip?.Contains(h.ToInt64()) != true)))
+            {
+                bool minimized = Native.IsIconic(h);
+                var app = AppName(h);
                 result.Add(new ArrangeCard
                 {
-                    Hwnd = h, Title = Native.TextOf(h), App = AppName(h), Icon = IconOf(h),
+                    Hwnd = h, Title = Native.TextOf(h), Icon = IconOf(h),
+                    App = minimized ? (app.Length > 0 ? app + " · minimized" : "Minimized") : app,
                     Thumb = ThumbCache.GetValueOrDefault(h),
                 });
+            }
             return true;
         }, IntPtr.Zero);
 
@@ -89,6 +99,7 @@ internal static class Arranger
     static BitmapSource? Capture(IntPtr h, int maxSize)
     {
         if (!Native.IsWindow(h) || Native.IsHungAppWindow(h)) return null; // PrintWindow would wait on it
+        if (Native.IsIconic(h)) return null; // nothing to print; the card keeps its icon (or the last snapshot)
 
         // Crop the invisible resize borders, same as when snapping.
         var visible = WindowSnapper.VisibleRect(h, out var outer);
@@ -133,9 +144,9 @@ internal static class Arranger
         }
     }
 
-    static bool IsCandidate(IntPtr h, uint self)
+    static bool IsCandidate(IntPtr h, uint self, bool includeMinimized)
     {
-        if (!WindowSnapper.IsSnappable(h) || Native.IsIconic(h)) return false;
+        if (!WindowSnapper.IsSnappable(h) || (!includeMinimized && Native.IsIconic(h))) return false;
         if (Native.GetWindow(h, Native.GW_OWNER) != IntPtr.Zero) return false; // dialogs, popups
 
         int ex = Native.GetWindowLong(h, Native.GWL_EXSTYLE);
@@ -245,10 +256,15 @@ internal static class Arranger
             // Always move and resize: real Windows snap of several windows in a row fights its own Snap Assist.
             WindowSnapper.Place(windows[i], work, new Zone(slots[i], Maximize: windows.Count == 1), gap, remember);
 
-        // Bring them all forward, first pick on top.
+        // Bring them all forward, first pick on top. Windows ignores HWND_TOP from a background process, but making
+        // a window topmost and back again always lifts it above every normal window.
+        const uint flags = Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE;
         for (int i = windows.Count - 1; i >= 0; i--)
-            Native.SetWindowPos(windows[i], IntPtr.Zero, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        {
+            if ((Native.GetWindowLong(windows[i], Native.GWL_EXSTYLE) & Native.WS_EX_TOPMOST) != 0) continue; // already above
+            Native.SetWindowPos(windows[i], Native.HWND_TOPMOST, 0, 0, 0, 0, flags);
+            Native.SetWindowPos(windows[i], Native.HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        }
         if (windows.Count > 0) Native.SetForegroundWindow(windows[0]);
     }
 }

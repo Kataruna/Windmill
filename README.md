@@ -24,6 +24,7 @@ Windmill is an independent project. It isn't affiliated with or endorsed by Loop
 - **Native Windows snap.** Halves and quarters use real Windows snap, so you get snap groups and Windows' own restore-on-drag. Other zones are moved and resized, and still return to their old size when you drag them away.
 - **Hold or Toggle.** Each menu can open while the shortcut is held, or open with a tap and close with a click.
 - **Looks.** An optional frosted blur behind the menu, an adjustable ring size, and an optional gap between snapped windows.
+- **Works with komorebi.** If [komorebi](https://github.com/LGUG2Z/komorebi) is running, Windmill drives it instead of fighting it (see below).
 - **Lives in the tray**, with an option to start with Windows.
 
 ## Controls
@@ -31,14 +32,16 @@ Windmill is an independent project. It isn't affiliated with or endorsed by Loop
 | | Snap menu (default **Alt**) | Auto-arrange (default **Alt + Shift**) |
 |---|---|---|
 | Open | Hold the shortcut | Hold the shortcut |
-| Choose | Move the mouse toward a zone | Click windows in order |
+| Choose | Move the mouse toward a zone, or aim with the arrow keys or **W A S D** | Click windows in order |
+| Diagonal | Two keys together, e.g. **W + D** for the top right, **A + S** for the bottom left | — |
+| Full screen | Push a short way up, or tap **Up** (or **W**) twice | — |
 | Change layout | **Tab** / **Shift + Tab** or scroll | — |
 | Confirm | Release the shortcut (Toggle: click, Enter or the shortcut again) | Release the shortcut (Toggle: Enter or the shortcut again) |
 | Cancel | **Esc** | **Esc** |
 
 With a touchscreen or pen, once a menu is open you can point at a zone or tap a window card with your finger. In Toggle mode, lifting your finger snaps to the zone under it.
 
-Pressing another key before the menu appears cancels it, so normal shortcuts like Alt+Tab or Alt+F4 keep working. If quick shortcuts still open the menu, raise **Hold delay** in Settings.
+The arrow keys and W A S D aim only once the menu is open; the aim stays when you let the keys go, and moving the mouse takes over again. Pressing another key before the menu appears cancels it, so normal shortcuts like Alt+Tab or Alt+F4 keep working. If quick shortcuts still open the menu, raise **Hold delay** in Settings.
 
 ## Settings
 
@@ -52,9 +55,21 @@ Right-click the tray icon and choose **Settings…**, or double-click the tray i
   - **Snap Assist:** keeps Windows' "pick a window for the other side" panel after a snap. Off by default.
   - **Gap between windows.**
   - **Include PowerToys FancyZones layouts.**
-- **General:** start with Windows.
+  - **komorebi:** see below. On by default.
+- **General:** start with Windows, and check for updates. When a new version is released on GitHub, Windmill shows a notification and an **Update to …** item in the tray menu. Both open the release page.
 
 Settings are stored in `%APPDATA%\Windmill\settings.json`.
+
+## komorebi
+
+When the komorebi tiling window manager is running, Windmill sends windows that komorebi tiles to komorebi through `komorebic` (on `PATH`, next to `komorebi.exe`, or in `%ProgramFiles%\komorebi\bin`), instead of moving them itself:
+
+- **Ring directions** move the window toward that side (`komorebic move`); the corners move it horizontally and then vertically.
+- **Full screen** (short push up) toggles maximize.
+- **Other layouts** switch the workspace to the closest komorebi layout (columns, rows, vertical or horizontal stack, or grid). Picking the first zone of the layout also promotes the window to the main area.
+- **Auto-arrange** shows the windows on the monitor under the cursor, minimized ones included. Windows on other monitors, other virtual desktops and other komorebi workspaces are left out and left alone. The windows you click are restored and tiled with the first one as the main window, followed by the others in order. Every other window on that monitor is minimized.
+
+Floating and ignored windows, and everything else when komorebi isn't running, snap as usual. Turn this off under **Settings → Windows → komorebi**.
 
 ## Install
 

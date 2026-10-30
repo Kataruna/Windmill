@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -28,6 +29,9 @@ internal sealed class Controller : IDisposable
     State _state = State.Idle;
     Mode _mode;
     ArrangeView? _arrange;
+    List<IntPtr>? _arrangeShown; // komorebi: every window listed for this monitor; the ones not picked get minimized
+    Task<HashSet<long>?>? _komorebiProbe; // started when the auto-arrange shortcut goes down; see Komorebi.ProbeAsync
+    bool _activating;     // auto-arrange is waiting for the komorebi probe before it opens
     CancellationTokenSource? _captures;   // background window snapshots for the arrange cards
     bool _clickSwallowed;
     bool _shortcutReleased; // toggle: every trigger key has been let go since the menu opened
@@ -42,6 +46,14 @@ internal sealed class Controller : IDisposable
     bool _moved;        // cursor has left the dead zone since the menu appeared
     Point? _touch;      // last finger/pen point on the menu; stands in for the cursor until the mouse moves
     Native.POINT _cursorAtTouch;
+
+    // Keyboard aim in the snap menu: arrows or WASD, two at once for a diagonal, Up twice for full screen. Like a
+    // touch, it stands in for the cursor until the mouse moves.
+    (int X, int Y, bool Full)? _aim;  // X: -1 left, 1 right; Y: 1 up, -1 down; Full: double-tapped Up
+    Native.POINT _cursorAtAim;
+    readonly HashSet<int> _aimHeld = new();  // direction keys down now; a press with none down starts a new aim
+    long _upTappedAt;                        // when Up alone was last pressed, for the double tap
+    const int DoubleTapMs = 350;
     int _selected = -1;
 
     public bool Enabled { get; set; } = true;
@@ -179,6 +191,9 @@ internal sealed class Controller : IDisposable
                         _state = State.Pending;
                         _holdTimer.Stop();
                         _holdTimer.Start();
+                        // Ask komorebi during the hold delay, on a worker: this is the hook callback.
+                        if (m == Mode.Arrange)
+                            _komorebiProbe = _settings.KomorebiIntegration ? Task.Run(Komorebi.ProbeAsync) : null;
                         if (Toggle) MaskModifiers(); // a tap may release Alt/Win before the menu opens
                     }
                 }
@@ -195,6 +210,17 @@ internal sealed class Controller : IDisposable
             _state = State.Idle;
             _blocked = true;
             return false;
+        }
+
+        if (_state == State.Active && _mode == Mode.Snap && Direction(vk) is { } dir)
+        {
+            if (!down) _aimHeld.Remove(vk);
+            else
+            {
+                bool fresh = _aimHeld.Count == 0;
+                if (_aimHeld.Add(vk)) _ui.BeginInvoke(() => Aim(dir.X, dir.Y, fresh)); // not on auto-repeat
+            }
+            return true; // swallowed, so the window underneath doesn't get them
         }
 
         if (_state == State.Active && vk is Native.VK_TAB or Native.VK_ESCAPE or Native.VK_RETURN)
@@ -256,10 +282,62 @@ internal sealed class Controller : IDisposable
         else if (Toggle) Commit();
     }
 
-    /// <summary>Where the user is pointing: the last touch, unless the mouse has moved since.</summary>
+    /// <summary>Arrow keys and WASD as a direction (Y: 1 = up), or null for any other key.</summary>
+    static (int X, int Y)? Direction(int vk) => vk switch
+    {
+        Native.VK_LEFT or 0x41 => (-1, 0),  // A
+        Native.VK_RIGHT or 0x44 => (1, 0),  // D
+        Native.VK_UP or 0x57 => (0, 1),     // W
+        Native.VK_DOWN or 0x53 => (0, -1),  // S
+        _ => null,
+    };
+
+    /// <summary>
+    /// A direction key went down. Keys held together add up to a diagonal, and the aim stays when they're let go
+    /// one by one; the next press after all are up starts over. Up pressed twice on its own aims at full screen.
+    /// </summary>
+    void Aim(int dx, int dy, bool fresh)
+    {
+        if (_state != State.Active) return;
+        var (x, y, _) = fresh || _aim is not { } old ? (0, 0, false) : old;
+        if (dx != 0) x = dx; // the axis' last key wins, so Left then Right aims right
+        if (dy != 0) y = dy;
+
+        bool full = false;
+        long now = Environment.TickCount64;
+        if (fresh && dx == 0 && dy == 1)
+        {
+            full = now - _upTappedAt <= DoubleTapMs;
+            _upTappedAt = full ? 0 : now; // a third tap starts a new double tap
+        }
+        else _upTappedAt = 0;
+
+        _aim = (x, y, full);
+        Native.GetCursorPos(out _cursorAtAim);
+        Update();
+    }
+
+    /// <summary>The point the keyboard aim stands for: on the ring (the inner arc for full screen) or the map's edge.</summary>
+    Point AimPoint((int X, int Y, bool Full) aim)
+    {
+        if (!_layouts[_layoutIndex].Radial)
+            return new Point(_panel.X + _panel.Width * (0.5 + 0.45 * aim.X), _panel.Y + _panel.Height * (0.5 - 0.45 * aim.Y));
+        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double r = (aim.Full ? (RadialMetrics.Inner + RadialMetrics.Split) / 2 : (RadialMetrics.RingStart + RadialMetrics.Outer) / 2) * dpi;
+        double a = aim.Full ? Math.PI / 2 : Math.Atan2(aim.Y, aim.X);
+        return new Point(_origin.X + r * Math.Cos(a), _origin.Y - r * Math.Sin(a));
+    }
+
+    /// <summary>Where the user is pointing: the keyboard aim or the last touch, unless the mouse has moved since.</summary>
     Native.POINT Pointer()
     {
         Native.GetCursorPos(out var pt);
+        if (_aim is { } aim && pt.X == _cursorAtAim.X && pt.Y == _cursorAtAim.Y)
+        {
+            var at = AimPoint(aim);
+            return new Native.POINT { X = (int)Math.Round(at.X), Y = (int)Math.Round(at.Y) };
+        }
+        _aim = null;
         if (_touch is { } t && pt.X == _cursorAtTouch.X && pt.Y == _cursorAtTouch.Y)
             return new Native.POINT { X = (int)t.X, Y = (int)t.Y };
         _touch = null;
@@ -270,8 +348,10 @@ internal sealed class Controller : IDisposable
 
     void Activate()
     {
-        if (_state != State.Pending) return; // a toggle tap and the hold timer can both get here
-        if (_mode == Mode.Arrange) { ActivateArrange(); return; }
+        // A toggle tap and the hold timer can both get here. Only a second auto-arrange waits for the first; switching
+        // to the snap menu meanwhile opens it, and the waiting auto-arrange then gives up.
+        if (_state != State.Pending || (_activating && _mode == Mode.Arrange)) return;
+        if (_mode == Mode.Arrange) { _ = ActivateArrangeAsync(); return; }
 
         var hwnd = Native.GetForegroundWindow();
         if (!WindowSnapper.IsSnappable(hwnd)) { _state = State.Idle; Block(); return; }
@@ -285,20 +365,40 @@ internal sealed class Controller : IDisposable
         Begin();
     }
 
-    void ActivateArrange()
+    async Task ActivateArrangeAsync()
     {
-        // List windows before the overlay appears so it can't count itself.
-        var cards = Arranger.FindWindows();
-        if (cards.Count == 0) { _state = State.Idle; Block(); return; }
+        // Usually finished during the hold delay; a toggle tap can get here sooner. Awaited, not waited on, so the
+        // keyboard hook on this thread keeps running.
+        HashSet<long>? parked = null;
+        if (_komorebiProbe is { } probe)
+        {
+            _activating = true;
+            // Any failure just means no komorebi mode; it mustn't leave the gesture stuck half open.
+            try { parked = await probe; }
+            catch (Exception) { parked = null; }
+            finally { _activating = false; }
+            // Released, cancelled or switched to the snap menu meanwhile.
+            if (_state != State.Pending || _mode != Mode.Arrange) return;
+        }
 
         Native.GetCursorPos(out var pt);
-        SetMonitor(Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST));
+        var hMon = Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST);
+
+        // With komorebi: this monitor and virtual desktop only, minimized windows too, but not the windows komorebi
+        // has put away on its other workspaces. List them before the overlay appears so it can't count itself.
+        bool komorebi = parked != null;
+        var cards = komorebi ? Arranger.FindWindows(hMon, parked) : Arranger.FindWindows();
+        if (cards.Count == 0) { _state = State.Idle; Block(); return; }
+        _arrangeShown = komorebi ? cards.Select(c => c.Hwnd).ToList() : null;
+
+        SetMonitor(hMon);
         var mon = _monitor.rcMonitor;
         var work = _monitor.rcWork;
         double dpi = Native.GetDpiForMonitor(_hMonitor);
         _arrange = Arranger.Plan(cards, new Rect(work.Left - mon.Left, work.Top - mon.Top, work.Width, work.Height), dpi);
         _captures = new CancellationTokenSource();
-        Arranger.CaptureThumbnails(_arrange.Cards, (int)(Arranger.CardWidth * 2 * dpi), _ui, _captures.Token);
+        // About the size they're drawn at, in physical pixels; each stays cached while its window exists.
+        Arranger.CaptureThumbnails(_arrange.Cards, (int)Math.Ceiling(Arranger.CardWidth * dpi), _ui, _captures.Token);
         Begin();
     }
 
@@ -306,6 +406,9 @@ internal sealed class Controller : IDisposable
     {
         _selected = -1;
         _touch = null;
+        _aim = null;
+        _aimHeld.Clear();
+        _upTappedAt = 0;
         _state = State.Active;
         _shortcutReleased = !_held.Overlaps(_triggerVks); // already true when a toggle tap opened it
         Update();
@@ -333,16 +436,25 @@ internal sealed class Controller : IDisposable
         if (_state != State.Active) return; // e.g. a queued click after Esc
         if (_mode == Mode.Arrange) { CommitArrange(); return; }
 
-        var zone = _selected >= 0 ? _layouts[_layoutIndex].Zones[_selected] : null;
+        var layout = _layouts[_layoutIndex];
+        int index = _selected;
+        var zone = index >= 0 ? layout.Zones[index] : null;
         var target = _target;
         var work = _monitor.rcWork;
         int gap = _settings.Gap;
         var style = _settings.SnapStyle;
         bool snapAssist = _settings.ShowSnapAssist;
+        bool komorebi = _settings.KomorebiIntegration;
         Close(snapped: zone != null);
         // Moving another process's window can block, so keep it out of the hook callback.
         if (zone != null)
-            _ui.BeginInvoke(() => WindowSnapper.Snap(target, work, zone, gap, style, snapAssist));
+            _ui.BeginInvoke(async () =>
+            {
+                if (komorebi && await Task.Run(() => Komorebi.IsRunning() ? Komorebi.SnapAsync(target, layout, zone, index)
+                                                                           : Task.FromResult(false)))
+                    return;
+                WindowSnapper.Snap(target, work, zone, gap, style, snapAssist);
+            });
     }
 
     void CommitArrange()
@@ -351,9 +463,16 @@ internal sealed class Controller : IDisposable
         var work = _monitor.rcWork;
         int gap = _settings.Gap;
         bool remember = _settings.SnapStyle == SnapStyle.Native;
+        var shown = _arrangeShown;
         Close(snapped: windows.Count > 0);
         if (windows.Count > 0)
-            _ui.BeginInvoke(() => Arranger.Arrange(windows, work, gap, remember));
+            _ui.BeginInvoke(async () =>
+            {
+                // komorebi: only the picks stay on screen, in the order komorebi tiles them; any it doesn't tile are
+                // arranged as usual.
+                var rest = shown != null ? await Task.Run(() => Komorebi.ShowOnlyAsync(windows, shown)) : windows;
+                if (rest.Count > 0) Arranger.Arrange(rest, work, gap, remember);
+            });
     }
 
     void Cancel()
@@ -385,10 +504,13 @@ internal sealed class Controller : IDisposable
         if (_state != State.Active) return;
         _layoutIndex = (_layoutIndex + step + _layouts.Count) % _layouts.Count;
         _selected = -1;
-        // Re-centre the menu under the cursor.
-        var pt = Pointer();
-        _origin = new Point(pt.X, pt.Y);
-        _moved = false;
+        // Re-centre the menu under the cursor; a keyboard aim keeps the menu where it is and aims the same way.
+        if (_aim == null)
+        {
+            var pt = Pointer();
+            _origin = new Point(pt.X, pt.Y);
+            _moved = false;
+        }
         PlacePanel();
         Update();
     }

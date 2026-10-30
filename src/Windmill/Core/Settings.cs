@@ -48,6 +48,12 @@ internal sealed class Settings
 
     public bool IncludeFancyZones { get; set; } = true;
 
+    /// <summary>While komorebi is running, snap windows it tiles by sending it commands instead of moving them.</summary>
+    public bool KomorebiIntegration { get; set; } = true;
+
+    /// <summary>Check GitHub for a newer release at startup and once a day, and say so in the tray.</summary>
+    public bool CheckForUpdates { get; set; } = true;
+
     public static string Directory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Windmill");
 
@@ -68,7 +74,7 @@ internal sealed class Settings
             if (File.Exists(FilePath))
                 return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
         }
-        catch (Exception ex) when (ex is IOException or JsonException)
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
             // Fall through to defaults; the file is rewritten below only if it was missing.
             return new Settings();
@@ -80,7 +86,7 @@ internal sealed class Settings
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(fresh, Json));
         }
-        catch (IOException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return fresh;
     }
 }

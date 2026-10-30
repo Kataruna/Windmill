@@ -280,6 +280,21 @@
                     </Grid>
                 </Border>
 
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="komorebi"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="While komorebi is running, windows it tiles are moved, maximized and reordered through komorebi instead."/>
+                        </StackPanel>
+                        <CheckBox x:Name="KomorebiBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+
                 <TextBlock Style="{StaticResource SectionHeader}" Text="General"/>
 
                 <Border Style="{StaticResource Card}">
@@ -294,6 +309,20 @@
                                        Text="Run Windmill in the notification area when you sign in."/>
                         </StackPanel>
                         <CheckBox x:Name="StartupBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Check for updates"/>
+                            <TextBlock x:Name="UpdatesCaption" Style="{StaticResource CardCaption}"/>
+                        </StackPanel>
+                        <CheckBox x:Name="UpdatesBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
                     </Grid>
                 </Border>
             </StackPanel>

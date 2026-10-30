@@ -788,7 +788,8 @@ internal sealed class OverlayWindow : Window
         }
 
         static string SnapHint(OverlayState st) =>
-            "Tab / scroll: change layout    Esc: cancel    " + (st.Toggle ? "click: snap" : "release: snap");
+            "Arrows / WASD: aim    " + (st.Layout.Radial ? "Up ×2: full screen    " : "") +
+            "Tab / scroll: layout    Esc: cancel    " + (st.Toggle ? "click / Enter: snap" : "release: snap");
 
         /// <summary>Snapshot clipped to a rounded box: <paramref name="fill"/> crops to cover it, otherwise it fits inside.</summary>
         static void DrawThumb(DrawingContext dc, ImageSource img, Rect box, double radius, bool fill)
@@ -884,9 +885,10 @@ internal sealed class OverlayWindow : Window
             dc.DrawText(ft, new Point(box.X + 14 * s, box.Y + 4 * s));
         }
 
+        static readonly Typeface Ui = new("Segoe UI");
+
         static FormattedText Text(string text, double size, Brush brush, double pixelsPerDip) =>
-            new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"), size, brush, pixelsPerDip);
+            new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Ui, size, brush, pixelsPerDip);
 
         // ---- small maths ----
 
