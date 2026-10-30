@@ -1,4 +1,5 @@
 using System;
+using System.Security;
 using Microsoft.Win32;
 
 namespace Windmill;
@@ -18,9 +19,13 @@ internal static class Startup
 
     public static void Set(bool on)
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-        if (key == null) return;
-        if (on) key.SetValue("Windmill", "\"" + Environment.ProcessPath + "\"");
-        else key.DeleteValue("Windmill", throwOnMissingValue: false);
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+            if (key == null) return;
+            if (on) key.SetValue("Windmill", "\"" + Environment.ProcessPath + "\"");
+            else key.DeleteValue("Windmill", throwOnMissingValue: false);
+        }
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException) { } // blocked by policy; callers show IsEnabled
     }
 }

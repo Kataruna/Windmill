@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Threading.Tasks;
@@ -14,6 +15,7 @@ internal sealed class OverlayState
 {
     public Layout Layout = null!;
     public ArrangeView? Arrange;    // set in auto-arrange mode, which draws window cards instead of the layout
+    public int ArrangeRevision;     // Arrange changes in place, so this is what tells two frames apart
     public bool Toggle;             // menu stays open after the shortcut is released (changes the hints)
     public int LayoutIndex, LayoutCount;
     public int Selected = -1;
@@ -109,8 +111,10 @@ internal sealed class OverlayWindow : Window
     {
         _surface.Screen = new Rect(monitor.Left, monitor.Top, monitor.Width, monitor.Height);
         if (!IsVisible) Show();
-        Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, monitor.Left, monitor.Top, monitor.Width, monitor.Height,
-            Native.SWP_NOACTIVATE);
+        // Twice: crossing to a monitor with other scaling, WPF resizes the window to Windows' suggestion during the move.
+        for (int pass = 0; pass < 2; pass++)
+            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, monitor.Left, monitor.Top, monitor.Width, monitor.Height,
+                Native.SWP_NOACTIVATE);
     }
 
     public void Render(OverlayState state) => _surface.Present(state);
@@ -154,6 +158,7 @@ internal sealed class OverlayWindow : Window
         // Auto-arrange: how picked each card looks, its last order number, and the preview slots.
         double[] _pick = Array.Empty<double>();
         double[] _thumb = Array.Empty<double>();   // snapshot fade-in per card
+        ImageSource?[] _thumbSeen = Array.Empty<ImageSource?>(); // a fresh snapshot replacing a cached one needs a redraw
         int[] _badge = Array.Empty<int>();
         readonly Rect[] _slot = new Rect[Arranger.MaxWindows];
         readonly double[] _slotAlpha = new double[Arranger.MaxWindows];
@@ -197,14 +202,13 @@ internal sealed class OverlayWindow : Window
             // Controller re-sends the state every 15 ms; only redraw when it actually changed.
             if (fresh || _state is not { } old || Differs(old, st)) _dirty = true;
             _state = st;
-            // A still menu stays stopped (see OnFrame). Auto-arrange changes in place (picks, snapshots arriving),
-            // which Differs can't see, so it keeps ticking while open.
-            if (_dirty || st.Arrange != null) StartTicking();
+            if (_dirty) StartTicking(); // a still menu stays stopped (see OnFrame)
         }
 
         static bool Differs(OverlayState a, OverlayState b) =>
-            a.Layout != b.Layout || a.Arrange != b.Arrange || a.Toggle != b.Toggle || a.LayoutIndex != b.LayoutIndex ||
-            a.LayoutCount != b.LayoutCount || a.Selected != b.Selected || a.Origin != b.Origin || a.Cursor != b.Cursor ||
+            a.Layout != b.Layout || a.Arrange != b.Arrange || a.ArrangeRevision != b.ArrangeRevision || a.Toggle != b.Toggle || a.LayoutIndex != b.LayoutIndex ||
+            a.LayoutCount != b.LayoutCount || a.Selected != b.Selected || a.Origin != b.Origin ||
+            (a.Cursor != b.Cursor && b.Arrange == null && b.Layout.Radial) || // only the ring's needle follows it
             a.Panel != b.Panel || a.Work != b.Work;
 
         /// <summary>
@@ -338,6 +342,8 @@ internal sealed class OverlayWindow : Window
             _hover = new double[n];
             _pick = new double[n];
             _thumb = new double[n];
+            _thumbSeen = new ImageSource?[n];
+            _text.Clear();
             _badge = new int[n];
             _previewAlpha = 0;
             Array.Clear(_slotAlpha);
@@ -384,6 +390,11 @@ internal sealed class OverlayWindow : Window
                 _shown = _closing = false;
                 StopTicking();
                 Dismissed?.Invoke();
+                // Nothing here is needed until the next menu; the redraw lets go of what the last frame drew.
+                _state = null;
+                _backdrop = null;
+                _text.Clear();
+                InvalidateVisual();
                 return;
             }
 
@@ -432,7 +443,9 @@ internal sealed class OverlayWindow : Window
                     int order = ar.Picked.IndexOf(i);
                     if (order >= 0) _badge[i] = order + 1; // kept while un-picking so the badge can fade out
                     _pick[i] = Track(_pick[i], _pick[i] + ((order >= 0 ? 1 : 0) - _pick[i]) * hk);
-                    if (ar.Cards[i].Thumb != null) _thumb[i] = Track(_thumb[i], _thumb[i] + (1 - _thumb[i]) * fk);
+                    if (ar.Cards[i].Thumb is not { } shot) continue;
+                    if (shot != _thumbSeen[i]) { _thumbSeen[i] = shot; _motion = 1; }
+                    _thumb[i] = Track(_thumb[i], _thumb[i] + (1 - _thumb[i]) * fk);
                 }
 
                 // Preview slots glide to their new shape as windows are added or removed.
@@ -539,16 +552,7 @@ internal sealed class OverlayWindow : Window
             dc.PushTransform(new ScaleTransform(MenuScale, MenuScale, o.X, o.Y));
 
             // Soft shadow so the ring reads on any wallpaper.
-            var shadow = new RadialGradientBrush
-            {
-                GradientStops =
-                {
-                    new(Color.FromArgb(110, 0, 0, 0), 0.0),
-                    new(Color.FromArgb(80, 0, 0, 0), 0.72),
-                    new(Color.FromArgb(0, 0, 0, 0), 1.0),
-                },
-            };
-            dc.DrawEllipse(shadow, null, o, outer + 36 * s, outer + 36 * s);
+            dc.DrawEllipse(RingShadow, null, o, outer + 36 * s, outer + 36 * s);
 
             var bg = Color.FromArgb(PanelAlpha, 28, 28, 34);
             var iconIdle = Color.FromArgb(70, 255, 255, 255);
@@ -609,6 +613,23 @@ internal sealed class OverlayWindow : Window
             dc.Pop();
         }
 
+        static readonly Brush RingShadow = MakeRingShadow();
+
+        static Brush MakeRingShadow()
+        {
+            var b = new RadialGradientBrush
+            {
+                GradientStops =
+                {
+                    new(Color.FromArgb(110, 0, 0, 0), 0.0),
+                    new(Color.FromArgb(80, 0, 0, 0), 0.72),
+                    new(Color.FromArgb(0, 0, 0, 0), 1.0),
+                },
+            };
+            b.Freeze();
+            return b;
+        }
+
         /// <summary>Zone layouts as a small map of the screen under the cursor; the full-size preview shows the real target.</summary>
         void DrawMini(DrawingContext dc, OverlayState st, double s, Color accent)
         {
@@ -641,8 +662,8 @@ internal sealed class OverlayWindow : Window
                 dc.PushTransform(new ScaleTransform(k, k, r.X + r.Width / 2, r.Y + r.Height / 2));
                 dc.DrawRoundedRectangle(Brush(Mix(idle, accent, h)), new Pen(Brush(Mix(idleLine, accent, h)), 1 * s), r, 6 * s, 6 * s);
 
-                var label = Text((i + 1).ToString(CultureInfo.InvariantCulture), 13 * s,
-                    Brush(Color.FromArgb((byte)Lerp(170, 255, h), 255, 255, 255)), s);
+                var label = Cached((i + 1).ToString(CultureInfo.InvariantCulture), 13 * s,
+                    Color.FromArgb((byte)Lerp(170, 255, h), 255, 255, 255), s);
                 if (label.Width + 4 * s < r.Width && label.Height < r.Height)
                     dc.DrawText(label, new Point(r.X + (r.Width - label.Width) / 2, r.Y + (r.Height - label.Height) / 2));
                 dc.Pop();
@@ -750,14 +771,8 @@ internal sealed class OverlayWindow : Window
                 DrawAppIcon(dc, c, new Rect(r.X + 10 * s, sy, icon, icon), s);
 
                 double tx = r.X + 10 * s + icon + 8 * s, tw = r.Right - 10 * s - tx;
-                var name = Text(c.Title, 12.5 * s, Brushes.White, s);
-                name.MaxTextWidth = Math.Max(1, tw);
-                name.MaxLineCount = 1;
-                name.Trimming = TextTrimming.CharacterEllipsis;
-                var app = Text(c.App, 10.5 * s, Brush(Color.FromArgb(150, 255, 255, 255)), s);
-                app.MaxTextWidth = Math.Max(1, tw);
-                app.MaxLineCount = 1;
-                app.Trimming = TextTrimming.CharacterEllipsis;
+                var name = Cached(c.Title, 12.5 * s, Colors.White, s, Math.Max(1, tw));
+                var app = Cached(c.App, 10.5 * s, Color.FromArgb(150, 255, 255, 255), s, Math.Max(1, tw));
                 double th = name.Height + (c.App.Length > 0 ? app.Height : 0);
                 double ty = shot.Bottom + (strip - th) / 2;
                 dc.DrawText(name, new Point(tx, ty));
@@ -877,7 +892,7 @@ internal sealed class OverlayWindow : Window
 
         void DrawPill(DrawingContext dc, string text, Point centerTop, double size, double s)
         {
-            var ft = Text(text, size, Brushes.White, s);
+            var ft = Cached(text, size, Colors.White, s);
             var box = new Rect(centerTop.X - ft.Width / 2 - 14 * s, centerTop.Y - 4 * s, ft.Width + 28 * s, ft.Height + 8 * s);
             DrawBackdrop(dc, new RectangleGeometry(box, box.Height / 2, box.Height / 2));
             dc.DrawRoundedRectangle(Brush(Color.FromArgb(_backdrop != null ? (byte)165 : (byte)210, 24, 24, 28)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
@@ -889,6 +904,24 @@ internal sealed class OverlayWindow : Window
 
         static FormattedText Text(string text, double size, Brush brush, double pixelsPerDip) =>
             new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Ui, size, brush, pixelsPerDip);
+
+        // Laying out text is the slowest part of a frame, and most of it doesn't change while a menu is open.
+        readonly Dictionary<(string, double, Color, double), FormattedText> _text = new();
+
+        /// <summary>Text that stays the same from frame to frame; a <paramref name="maxWidth"/> keeps it to one trimmed line.</summary>
+        FormattedText Cached(string text, double size, Color color, double pixelsPerDip, double maxWidth = 0)
+        {
+            var key = (text, size, color, maxWidth);
+            if (_text.TryGetValue(key, out var ft)) return ft;
+            ft = Text(text, size, Brush(color), pixelsPerDip);
+            if (maxWidth > 0)
+            {
+                ft.MaxTextWidth = maxWidth;
+                ft.MaxLineCount = 1;
+                ft.Trimming = TextTrimming.CharacterEllipsis;
+            }
+            return _text[key] = ft;
+        }
 
         // ---- small maths ----
 

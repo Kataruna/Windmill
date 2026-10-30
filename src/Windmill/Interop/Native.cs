@@ -108,15 +108,30 @@ internal static class Native
     public static extern IntPtr GetModuleHandle(string? lpModuleName);
 
     [DllImport("user32.dll")]
-    public static extern short GetKeyState(int vk);
-
-    [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT pt);
 
-    public const int SM_CXDRAG = 68, SM_CYDRAG = 69;
+    const uint CURSOR_SUPPRESSED = 0x2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct CURSORINFO { public int cbSize; public uint flags; public IntPtr hCursor; public POINT pt; }
+
+    [DllImport("user32.dll")]
+    static extern bool GetCursorInfo(ref CURSORINFO info);
+
+    /// <summary>
+    /// Touch was the last input, so there's no cursor and GetCursorPos means nothing until the mouse moves. Without a
+    /// touchscreen it can only be a pen, and a pen tablet keeps the cursor where the pen is.
+    /// </summary>
+    public static bool CursorSuppressed()
+    {
+        var info = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+        return GetSystemMetrics(SM_MAXIMUMTOUCHES) > 0 && GetCursorInfo(ref info) && (info.flags & CURSOR_SUPPRESSED) != 0;
+    }
+
+    public const int SM_SWAPBUTTON = 23, SM_CXDRAG = 68, SM_CYDRAG = 69, SM_MAXIMUMTOUCHES = 95;
 
     [DllImport("user32.dll")]
     public static extern int GetSystemMetrics(int index);

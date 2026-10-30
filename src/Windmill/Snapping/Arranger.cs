@@ -30,6 +30,7 @@ internal sealed class ArrangeView
 {
     public List<ArrangeCard> Cards = new();
     public List<int> Picked = new();
+    public int Revision; // bumped when a pick or a snapshot changes, which the overlay can't see from the outside
     public bool Portrait;
     public Rect Map;    // miniature preview of the arrangement
     public Rect Grid;   // bounding box of the cards
@@ -50,10 +51,13 @@ internal static class Arranger
     /// Visible, non-minimized top-level app windows, front-most first. Given a monitor, only the windows on it and on
     /// the current virtual desktop, minimized ones included, except those in <paramref name="skip"/>.
     /// </summary>
+    // ponytail: runs on the UI thread, which also runs the keyboard hook; each window can cost two 40 ms icon requests.
+    // Fine for normal window counts; move the listing to a worker if a desktop full of busy apps ever trips the hook timeout.
     public static List<ArrangeCard> FindWindows(IntPtr monitor = default, IReadOnlySet<long>? skip = null)
     {
         var result = new List<ArrangeCard>();
         uint self = (uint)Environment.ProcessId;
+        var names = ProcessNames();
         Native.EnumWindows((h, _) =>
         {
             if (IsCandidate(h, self, includeMinimized: monitor != IntPtr.Zero)
@@ -61,7 +65,7 @@ internal static class Arranger
                                                && Native.OnCurrentDesktop(h) && skip?.Contains(h.ToInt64()) != true)))
             {
                 bool minimized = Native.IsIconic(h);
-                var app = AppName(h);
+                var app = AppName(h, names);
                 result.Add(new ArrangeCard
                 {
                     Hwnd = h, Title = Native.TextOf(h), Icon = IconOf(h),
@@ -81,9 +85,9 @@ internal static class Arranger
     /// Snapshots each card's window in the background, front-most first, handing each result to the UI thread.
     /// One at a time so a screen full of large windows doesn't spike memory.
     /// </summary>
-    public static void CaptureThumbnails(IReadOnlyList<ArrangeCard> cards, int maxSize, Dispatcher ui, CancellationToken stop)
+    public static void CaptureThumbnails(ArrangeView view, int maxSize, Dispatcher ui, CancellationToken stop)
     {
-        var targets = cards.Select(c => (card: c, hwnd: c.Hwnd)).ToList();
+        var targets = view.Cards.Select(c => (card: c, hwnd: c.Hwnd)).ToList();
         Task.Run(() =>
         {
             foreach (var (card, hwnd) in targets)
@@ -91,7 +95,7 @@ internal static class Arranger
                 if (stop.IsCancellationRequested) return;
                 var thumb = Capture(hwnd, maxSize);
                 if (thumb != null)
-                    ui.BeginInvoke(() => { card.Thumb = thumb; ThumbCache[hwnd] = thumb; });
+                    ui.BeginInvoke(() => { card.Thumb = thumb; ThumbCache[hwnd] = thumb; view.Revision++; });
             }
         }, stop);
     }
@@ -160,18 +164,23 @@ internal static class Arranger
         return pid != self && Native.GetWindowTextLength(h) > 0;
     }
 
-    static string AppName(IntPtr h)
+    /// <summary>Every process's name by id, read once: looking one up by id lists all of them each time.</summary>
+    static Dictionary<uint, string> ProcessNames()
+    {
+        var names = new Dictionary<uint, string>();
+        foreach (var p in Process.GetProcesses())
+        {
+            names[(uint)p.Id] = p.ProcessName;
+            p.Dispose();
+        }
+        return names;
+    }
+
+    static string AppName(IntPtr h, Dictionary<uint, string> names)
     {
         Native.GetWindowThreadProcessId(h, out uint pid);
-        try
-        {
-            using var p = Process.GetProcessById((int)pid);
-            return p.ProcessName == "ApplicationFrameHost" ? "" : p.ProcessName;
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-        {
-            return ""; // exited meanwhile
-        }
+        var name = names.GetValueOrDefault(pid, ""); // missing: started after the list was read
+        return name == "ApplicationFrameHost" ? "" : name;
     }
 
     static ImageSource? IconOf(IntPtr h)

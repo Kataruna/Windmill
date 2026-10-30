@@ -18,9 +18,10 @@ internal sealed class Controller : IDisposable
     readonly OverlayWindow _overlay = new();
     readonly DispatcherTimer _holdTimer = new();
     readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromMilliseconds(15) };
+    readonly DispatcherTimer _trimTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
 
-    Settings _settings = Settings.Load();
+    Settings _settings = new(); // read by Reload
     List<Layout> _layouts = new();
     int[][] _chord = Array.Empty<int[]>();   // one entry per required key; each lists its acceptable vk codes; empty when the snap menu is off
     int[][] _arrangeChord = Array.Empty<int[]>(); // empty when auto-arrange is turned off
@@ -34,6 +35,8 @@ internal sealed class Controller : IDisposable
     bool _activating;     // auto-arrange is waiting for the komorebi probe before it opens
     CancellationTokenSource? _captures;   // background window snapshots for the arrange cards
     bool _clickSwallowed;
+    int _wheel;         // scrolled so far towards the next layout
+    const int WheelNotch = 120;
     bool _shortcutReleased; // toggle: every trigger key has been let go since the menu opened
     bool _blocked;      // set after a gesture ends or is aborted, until every trigger key is released
     int _layoutIndex;
@@ -76,7 +79,20 @@ internal sealed class Controller : IDisposable
     {
         Reload();
         _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Activate(); };
-        _pollTimer.Tick += (_, _) => Update();
+        _pollTimer.Tick += (_, _) => Poll();
+        // A menu's memory is nearly all native (WPF's drawing resources), freed only by finalizers, and with so little
+        // managed garbage no collection comes along by itself. Once settled, ask for one, and off the hook's thread.
+        _trimTimer.Tick += (_, _) =>
+        {
+            _trimTimer.Stop();
+            if (_state != State.Idle) return;
+            Task.Run(() =>
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            });
+        };
         _hook.Key = OnKey;
         _hook.Wheel = OnWheel;
         _hook.Click = OnClick;
@@ -97,6 +113,8 @@ internal sealed class Controller : IDisposable
 
     public void Reload()
     {
+        // The layouts and shortcuts below may no longer match an open menu (Alt+F4 on the settings window, say).
+        if (_state != State.Idle) { _holdTimer.Stop(); Close(snapped: false); }
         _settings = Settings.Load();
         _layouts = Layouts.LoadAll(_settings);
         _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
@@ -111,15 +129,28 @@ internal sealed class Controller : IDisposable
         RadialMetrics.Scale = Math.Clamp(_settings.RingSizePercent, 50, 150) / 100.0;
         DragRestore.Enabled = _settings.SnapStyle == SnapStyle.Native;
         _overlay.Blur = _settings.BlurBehindMenu;
+        TrimSoon(); // also lets go of what startup or the settings window used
     }
 
-    // Left/right variants share a name so "Alt" works on either side.
+    void TrimSoon()
+    {
+        _trimTimer.Stop();
+        _trimTimer.Start();
+    }
+
+    // Left/right variants share a name so "Alt" works on either side; "LAlt" and the like mean that side only.
     static int[] ParseTrigger(string name) => name.Trim().ToLowerInvariant() switch
     {
         "alt" => new[] { 0xA4, 0xA5 },
         "ctrl" or "control" => new[] { 0xA2, 0xA3 },
         "shift" => new[] { 0xA0, 0xA1 },
         "win" => new[] { 0x5B, 0x5C },
+        "lalt" => new[] { 0xA4 },
+        "ralt" => new[] { 0xA5 },
+        "lctrl" => new[] { 0xA2 },
+        "rctrl" => new[] { 0xA3 },
+        "lshift" => new[] { 0xA0 },
+        "rshift" => new[] { 0xA1 },
         _ => new[] { (int)Enum.Parse<System.Windows.Forms.Keys>(name, ignoreCase: true) },
     };
 
@@ -151,9 +182,13 @@ internal sealed class Controller : IDisposable
     {
         if (down)
         {
+            // The hook runs before the key state updates, so a key that isn't down yet is a new press, not auto-repeat.
+            bool fresh = (Native.GetAsyncKeyState(vk) & 0x8000) == 0;
             // Key-ups can be lost (lock screen, UAC), so forget keys that are no longer physically down.
             _held.RemoveWhere(k => k != vk && (Native.GetAsyncKeyState(k) & 0x8000) == 0);
             _held.Add(vk);
+            // The lost key-up may be the one that would have re-armed the shortcut.
+            if (_blocked && fresh && !_held.Any(k => k != vk && _triggerVks.Contains(k))) _blocked = false;
         }
         else _held.Remove(vk);
 
@@ -231,7 +266,8 @@ internal sealed class Controller : IDisposable
                 else if (vk == Native.VK_RETURN) Commit();
                 else if (_mode == Mode.Snap) // arrange mode swallows Tab so Alt+Shift+Tab can't open the task switcher
                 {
-                    int step = (Native.GetKeyState(Native.VK_SHIFT) & 0x8000) != 0 ? -1 : 1;
+                    // Async: GetKeyState follows this thread's own input, and the keys are going to another window.
+                    int step = (Native.GetAsyncKeyState(Native.VK_SHIFT) & 0x8000) != 0 ? -1 : 1;
                     _ui.BeginInvoke(() => CycleLayout(step));
                 }
             }
@@ -244,7 +280,11 @@ internal sealed class Controller : IDisposable
     {
         if (_state != State.Active) return false;
         if (_mode != Mode.Snap) return true; // keep the scroll from reaching the window underneath
-        int step = delta > 0 ? -1 : 1;
+        // Touchpads and smooth wheels send small steps; one notch's worth changes the layout once.
+        _wheel += delta;
+        if (Math.Abs(_wheel) < WheelNotch) return true;
+        int step = _wheel > 0 ? -1 : 1;
+        _wheel = 0;
         _ui.BeginInvoke(() => CycleLayout(step));
         return true;
     }
@@ -274,6 +314,7 @@ internal sealed class Controller : IDisposable
     void OnTouch(TouchPhase phase, Point at)
     {
         if (_state != State.Active) return;
+        _aim = null; // the keyboard aim would otherwise win over the finger
         _touch = at;
         Native.GetCursorPos(out _cursorAtTouch);
         Update();
@@ -358,11 +399,21 @@ internal sealed class Controller : IDisposable
 
         _target = hwnd;
         Native.GetCursorPos(out var pt);
-        SetMonitor(Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST));
-        _origin = new Point(pt.X, pt.Y);
+        var at = pt;
+        Point? noCursor = null;
+        // After touch there's no cursor and its position means nothing, so open on the window instead; that point
+        // then stands in for the cursor, like a touch, until the mouse moves.
+        if (Native.CursorSuppressed() && Native.GetWindowRect(hwnd, out var rect))
+        {
+            at = new Native.POINT { X = rect.Left + rect.Width / 2, Y = rect.Top + rect.Height / 2 };
+            noCursor = new Point(at.X, at.Y);
+            _cursorAtTouch = pt;
+        }
+        SetMonitor(Native.MonitorFromPoint(at, Native.MONITOR_DEFAULTTONEAREST));
+        _origin = new Point(at.X, at.Y);
         _moved = false;
         PlacePanel();
-        Begin();
+        Begin(noCursor);
     }
 
     async Task ActivateArrangeAsync()
@@ -382,7 +433,10 @@ internal sealed class Controller : IDisposable
         }
 
         Native.GetCursorPos(out var pt);
-        var hMon = Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST);
+        // After touch the cursor's position means nothing, so go by the window in use.
+        var hMon = Native.CursorSuppressed()
+            ? Native.MonitorFromWindow(Native.GetForegroundWindow(), Native.MONITOR_DEFAULTTONEAREST)
+            : Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST);
 
         // With komorebi: this monitor and virtual desktop only, minimized windows too, but not the windows komorebi
         // has put away on its other workspaces. List them before the overlay appears so it can't count itself.
@@ -398,14 +452,15 @@ internal sealed class Controller : IDisposable
         _arrange = Arranger.Plan(cards, new Rect(work.Left - mon.Left, work.Top - mon.Top, work.Width, work.Height), dpi);
         _captures = new CancellationTokenSource();
         // About the size they're drawn at, in physical pixels; each stays cached while its window exists.
-        Arranger.CaptureThumbnails(_arrange.Cards, (int)Math.Ceiling(Arranger.CardWidth * dpi), _ui, _captures.Token);
+        Arranger.CaptureThumbnails(_arrange, (int)Math.Ceiling(Arranger.CardWidth * dpi), _ui, _captures.Token);
         Begin();
     }
 
-    void Begin()
+    void Begin(Point? touch = null)
     {
         _selected = -1;
-        _touch = null;
+        _wheel = 0;
+        _touch = touch;
         _aim = null;
         _aimHeld.Clear();
         _upTappedAt = 0;
@@ -428,6 +483,7 @@ internal sealed class Controller : IDisposable
         int i = ar.HitTest(new Point(pt.X - _monitor.rcMonitor.Left, pt.Y - _monitor.rcMonitor.Top));
         if (i < 0) return;
         if (!ar.Picked.Remove(i) && ar.Picked.Count < Arranger.MaxWindows) ar.Picked.Add(i);
+        ar.Revision++;
         Update();
     }
 
@@ -490,7 +546,10 @@ internal sealed class Controller : IDisposable
         Block(); // holding the trigger after a snap must not reopen the menu
         _captures?.Cancel();
         _captures = null;
+        _arrange = null; // its icons and snapshots aren't needed between menus
+        _arrangeShown = null;
         _overlay.Dismiss(snapped);
+        TrimSoon();
     }
 
     /// <summary>Drops the mouse hook, unless it still has to swallow the release of a click it swallowed.</summary>
@@ -508,7 +567,8 @@ internal sealed class Controller : IDisposable
         if (_aim == null)
         {
             var pt = Pointer();
-            _origin = new Point(pt.X, pt.Y);
+            var mon = _monitor.rcMonitor; // the cursor may have wandered onto another monitor; the menu can't follow
+            _origin = new Point(Math.Clamp(pt.X, mon.Left, mon.Right - 1), Math.Clamp(pt.Y, mon.Top, mon.Bottom - 1));
             _moved = false;
         }
         PlacePanel();
@@ -538,6 +598,19 @@ internal sealed class Controller : IDisposable
         _overlay.PlaceOn(_monitor.rcMonitor);
     }
 
+    void Poll()
+    {
+        // A release can go unseen (UAC prompt, lock screen), which would leave the menu up with nothing held.
+        if (_state == State.Active && !Toggle
+            && !ActiveChord.All(variants => variants.Any(k => (Native.GetAsyncKeyState(k) & 0x8000) != 0)))
+        {
+            _held.RemoveWhere(k => (Native.GetAsyncKeyState(k) & 0x8000) == 0);
+            Close(snapped: false);
+            return;
+        }
+        Update();
+    }
+
     void Update()
     {
         if (_state != State.Active) return;
@@ -555,6 +628,7 @@ internal sealed class Controller : IDisposable
         {
             Layout = layout,
             Arrange = arrange,
+            ArrangeRevision = arrange?.Revision ?? 0,
             Toggle = Toggle,
             LayoutIndex = _layoutIndex,
             LayoutCount = _layouts.Count,

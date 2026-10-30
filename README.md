@@ -21,8 +21,9 @@ Windmill is an independent project. It isn't affiliated with or endorsed by Loop
 - **More layouts.** Press **Tab** or scroll to switch between the ring and miniature zone maps: halves, thirds, priority columns, rows, quarters, a 3×2 grid and more.
 - **PowerToys FancyZones layouts.** Custom layouts you made in FancyZones appear in the list automatically.
 - **Auto-arrange.** Hold **Alt + Shift** to see your open windows. Click up to six in order, then release to tile them; the first one you click gets the most space.
-- **Native Windows snap.** Halves and quarters use real Windows snap, so you get snap groups and Windows' own restore-on-drag. Other zones are moved and resized, and still return to their old size when you drag them away.
+- **Native Windows snap.** Halves use real Windows snap, so you get snap groups and Windows' own restore-on-drag. Other zones, quarters included, are moved straight into place in one step, and still return to their old size when you drag them away.
 - **Hold or Toggle.** Each menu can open while the shortcut is held, or open with a tap and close with a click.
+- **One-sided shortcuts.** Turn on **Left and right keys are different** in Settings, then record a shortcut, to use only the left or right Ctrl, Alt, Shift or Win.
 - **Looks.** An optional frosted blur behind the menu, an adjustable ring size, and an optional gap between snapped windows.
 - **Works with komorebi.** If [komorebi](https://github.com/LGUG2Z/komorebi) is running, Windmill drives it instead of fighting it (see below).
 - **Lives in the tray**, with an option to start with Windows.
@@ -39,7 +40,7 @@ Windmill is an independent project. It isn't affiliated with or endorsed by Loop
 | Confirm | Release the shortcut (Toggle: click, Enter or the shortcut again) | Release the shortcut (Toggle: Enter or the shortcut again) |
 | Cancel | **Esc** | **Esc** |
 
-With a touchscreen or pen, once a menu is open you can point at a zone or tap a window card with your finger. In Toggle mode, lifting your finger snaps to the zone under it.
+With a touchscreen or pen, once a menu is open you can point at a zone or tap a window card with your finger. In Toggle mode, lifting your finger snaps to the zone under it. If you've been using touch, the snap menu opens in the middle of the window instead of at the cursor.
 
 The arrow keys and W A S D aim only once the menu is open; the aim stays when you let the keys go, and moving the mouse takes over again. Pressing another key before the menu appears cancels it, so normal shortcuts like Alt+Tab or Alt+F4 keep working. If quick shortcuts still open the menu, raise **Hold delay** in Settings.
 
@@ -123,7 +124,7 @@ installer/          Inno Setup script
 
 ## Limitations
 
-- Native snap only applies to halves and quarters with the gap set to 0. Everything else, and all of auto-arrange, is moved and resized by Windmill.
+- Native snap only applies to halves with the gap set to 0. Everything else, and all of auto-arrange, is moved and resized by Windmill.
 - On Windows 10 versions older than 1903, Windows can't tell Windmill whether a snap worked, so Windmill always moves and resizes there.
 - Windmill can't move windows of apps running as administrator unless Windmill also runs as administrator. This is a Windows restriction.
 - The snap shortcut uses a global keyboard hook. While a menu is open, Windmill also briefly installs a mouse hook for scrolling and clicks.

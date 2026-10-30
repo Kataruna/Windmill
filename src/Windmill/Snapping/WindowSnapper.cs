@@ -7,8 +7,9 @@ using System.Text.Json.Serialization;
 namespace Windmill;
 
 /// <summary>
-/// Native: zones Windows can snap to itself (halves, quarters, no gap) use real Windows snap; every other zone is
-/// moved and resized, and returns to its old size when dragged away. Classic: always just move and resize.
+/// Native: zones one Win+Arrow reaches (halves, no gap) use real Windows snap; every other zone is moved and resized,
+/// and returns to its old size when dragged away. Quarters are in that second group: Windows only gets there in two
+/// presses, which shows a half first and waits on Snap Assist in between. Classic: always just move and resize.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<SnapStyle>))]
 internal enum SnapStyle { Native, Classic }
@@ -19,7 +20,8 @@ internal static class WindowSnapper
     public static bool IsSnappable(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd) || !Native.IsWindowVisible(hwnd)) return false;
-        return Native.ClassOf(hwnd) is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd");
+        return Native.ClassOf(hwnd) is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"
+            or "Windows.UI.Core.CoreWindow" or "XamlExplorerHostIslandWindow"); // Start, search, task view, Snap Assist
     }
 
     // Per window, bumped by every snap of that window. A native snap still waiting or checking its result gives up
@@ -40,26 +42,21 @@ internal static class WindowSnapper
     public static void Snap(IntPtr hwnd, Native.RECT work, Zone zone, int gap, SnapStyle style, bool snapAssist)
     {
         int generation = NextGeneration(hwnd);
-        if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && Native.CanDetectSnap && ArrowsFor(zone.Rect) is { } arrows)
-            _ = SnapNativeAsync(hwnd, work, zone, arrows, snapAssist, generation);
+        if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && Native.CanDetectSnap && ArrowFor(zone.Rect) is { } arrow)
+            _ = SnapNativeAsync(hwnd, work, zone, arrow, snapAssist, generation);
         else
             Place(hwnd, work, zone, gap, remember: style == SnapStyle.Native);
     }
 
-    /// <summary>Win+Arrow presses that put a restored window into <paramref name="r"/>, or null if Windows has no such snap.</summary>
-    public static ushort[]? ArrowsFor(NRect r)
+    /// <summary>The Win+Arrow that puts a restored window into <paramref name="r"/>, or null if no single press does.</summary>
+    public static ushort? ArrowFor(NRect r)
     {
         static bool Near(double a, double b) => Math.Abs(a - b) < 0.002;
-        if (!Near(r.W, 0.5)) return null;
-        ushort side = Near(r.X, 0) ? Native.VK_LEFT : Near(r.X, 0.5) ? Native.VK_RIGHT : (ushort)0;
-        if (side == 0) return null;
-        if (Near(r.Y, 0) && Near(r.H, 1)) return new[] { side };
-        if (Near(r.H, 0.5) && Near(r.Y, 0)) return new[] { side, Native.VK_UP };
-        if (Near(r.H, 0.5) && Near(r.Y, 0.5)) return new[] { side, Native.VK_DOWN };
-        return null;
+        if (!Near(r.W, 0.5) || !Near(r.Y, 0) || !Near(r.H, 1)) return null;
+        return Near(r.X, 0) ? Native.VK_LEFT : Near(r.X, 0.5) ? Native.VK_RIGHT : null;
     }
 
-    static async Task SnapNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort[] arrows, bool snapAssist, int generation)
+    static async Task SnapNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort arrow, bool snapAssist, int generation)
     {
         bool Superseded() => generation != _generation.GetValueOrDefault(hwnd);
 
@@ -71,12 +68,14 @@ internal static class WindowSnapper
             await Task.Delay(15);
             if (Superseded()) return;
         }
-        if (!Native.IsWindow(hwnd)) return;
+        if (!Native.IsWindow(hwnd) || Native.IsHungAppWindow(hwnd)) return; // a hung window would block this thread
 
         // Start from a plain restored window: Win+Left on a left-snapped window would jump to the next monitor.
-        if (Native.IsIconic(hwnd) || Native.IsZoomed(hwnd) || Native.IsWindowArranged(hwnd))
+        static bool Plain(IntPtr h) => !Native.IsIconic(h) && !Native.IsZoomed(h) && !Native.IsWindowArranged(h);
+        if (!Plain(hwnd))
         {
-            Native.ShowWindow(hwnd, Native.SW_RESTORE);
+            Native.ShowWindowAsync(hwnd, Native.SW_RESTORE); // async: a busy window would hold up the keyboard hook
+            for (int i = 0; i < 20 && !Plain(hwnd); i++) await Task.Delay(15); // ~300 ms
             await Task.Delay(50); // let Windows finish leaving the snapped state before the next snap
             if (Superseded()) return;
         }
@@ -91,28 +90,17 @@ internal static class WindowSnapper
         Native.SetForegroundWindow(hwnd);
         if (Native.GetForegroundWindow() == hwnd)
         {
-            // One arrow at a time: an Up sent while the first snap is still in progress maximizes instead.
-            bool snapped = true;
-            for (int a = 0; a < arrows.Length; a++)
+            var start = VisibleRect(hwnd, out _);
+            Native.SendWinArrows(new[] { arrow });
+            for (int i = 0; i < 30 && !(Native.IsWindowArranged(hwnd) && !Same(VisibleRect(hwnd, out _), start)); i++)
             {
-                // The user may have clicked another window while we waited; the arrow would act on that one.
-                if (a > 0 && Native.GetForegroundWindow() != hwnd) { snapped = false; break; }
-                var arrow = arrows[a];
-                var start = VisibleRect(hwnd, out _);
-                Native.SendWinArrows(new[] { arrow });
-                for (int i = 0; i < 30 && !(Native.IsWindowArranged(hwnd) && !Same(VisibleRect(hwnd, out _), start)); i++)
-                {
-                    await Task.Delay(15);
-                    if (Superseded()) return;
-                }
-                // Didn't snap: stop, since Win+Up/Down on an unsnapped window would maximize or minimize it.
-                if (!Native.IsWindowArranged(hwnd)) { snapped = false; break; }
-
-                // Snap Assist (the "pick a window for the other side" panel) grabs focus right after a snap, which
-                // would swallow the next arrow. Left open after the last one if wanted.
-                if (snapAssist && a == arrows.Length - 1) break;
-                if (!await DismissSnapAssistAsync(hwnd, Superseded)) return;
+                await Task.Delay(15);
+                if (Superseded()) return;
             }
+            bool snapped = Native.IsWindowArranged(hwnd);
+
+            // Snap Assist is the "pick a window for the other side" panel.
+            if (snapped && !snapAssist && !await DismissSnapAssistAsync(hwnd, Superseded)) return;
             var target = TargetRect(work, zone, 0);
             for (int i = 0; snapped && i < 40; i++) // ~600 ms
             {
@@ -138,7 +126,8 @@ internal static class WindowSnapper
         if (!WindowsSnapAssistOn()) return true;
         for (int i = 0; i < 65; i++) // ~1 s
         {
-            if (IsSnapAssist(Native.GetForegroundWindow()))
+            // Not with a modifier down: that would send Alt+Esc or Ctrl+Esc, and Alt+Tab's switcher looks the same.
+            if (!ModifierDown() && IsSnapAssist(Native.GetForegroundWindow()))
             {
                 // Esc is how Snap Assist closes itself; just taking focus back can be refused by Windows, and
                 // then the panel stays. The input hook ignores injected keys, so this can't reach the menu.
@@ -216,7 +205,8 @@ internal static class WindowSnapper
     public static void Place(IntPtr hwnd, Native.RECT work, Zone zone, int gap, bool remember)
     {
         NextGeneration(hwnd); // any placement (auto-arrange too) supersedes a native snap of this window in progress
-        if (!Native.IsWindow(hwnd)) return;
+        // A hung window would block this thread, and with it the keyboard hook every keypress waits for.
+        if (!Native.IsWindow(hwnd) || Native.IsHungAppWindow(hwnd)) return;
 
         if (Native.IsIconic(hwnd) || Native.IsZoomed(hwnd) || (remember && Native.IsWindowArranged(hwnd)))
             Native.ShowWindow(hwnd, Native.SW_RESTORE); // leaving Windows snap first means we remember the real size
@@ -289,7 +279,9 @@ internal static class DragRestore
             : (before.Width, before.Height, beforeDpi, after);
     }
 
-    static bool LeftButtonDown() => (Native.GetAsyncKeyState(0x01) & 0x8000) != 0; // VK_LBUTTON
+    // GetAsyncKeyState reads the physical button, so on a left-handed mouse the primary one is VK_RBUTTON.
+    static bool LeftButtonDown() =>
+        (Native.GetAsyncKeyState(Native.GetSystemMetrics(Native.SM_SWAPBUTTON) != 0 ? 0x02 : 0x01) & 0x8000) != 0;
 
     static bool SizeUnchanged(IntPtr hwnd, Native.RECT applied, out Native.RECT cur)
     {

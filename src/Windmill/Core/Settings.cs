@@ -17,10 +17,13 @@ internal sealed class Settings
     public ActivationStyle ArrangeActivation { get; set; } = ActivationStyle.Hold;
 
     /// <summary>
-    /// Keys that must be held together. Use Alt, Ctrl, Shift or Win (either side), or a specific
-    /// System.Windows.Forms.Keys name such as LMenu, RControlKey, CapsLock, F13.
+    /// Keys that must be held together. Use Alt, Ctrl, Shift or Win (either side), LAlt, RCtrl and so on (that side
+    /// only), or a specific System.Windows.Forms.Keys name such as CapsLock or F13.
     /// </summary>
     public string[] TriggerKeys { get; set; } = { "Alt" };
+
+    /// <summary>Recording a shortcut keeps which side's Ctrl, Alt, Shift or Win was pressed.</summary>
+    public bool RecordKeySide { get; set; } = false;
 
     /// <summary>Hold to pick up to six open windows and tile them together. Same key names as <see cref="TriggerKeys"/>.</summary>
     public string[] ArrangeKeys { get; set; } = { "Alt", "Shift" };
@@ -59,12 +62,16 @@ internal sealed class Settings
 
     public static string FilePath => Path.Combine(Directory, "settings.json");
 
-    static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    // A hand-edited "TriggerKeys": null is then a bad file, not a crash later on.
+    static readonly JsonSerializerOptions Json = new() { WriteIndented = true, RespectNullableAnnotations = true };
 
     public void Save()
     {
         System.IO.Directory.CreateDirectory(Directory);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+        // Through a temporary file, so a crash or full disk mid-write can't lose the settings already saved.
+        var temp = FilePath + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(this, Json));
+        File.Move(temp, FilePath, overwrite: true);
     }
 
     public static Settings Load()
@@ -72,7 +79,7 @@ internal sealed class Settings
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

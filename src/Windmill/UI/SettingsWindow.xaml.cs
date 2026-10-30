@@ -29,6 +29,7 @@ public partial class SettingsWindow : Window
         _arrangeKeys = s.ArrangeKeys;
         ShortcutButton.Content = Describe(_triggerKeys);
         ArrangeButton.Content = Describe(_arrangeKeys);
+        KeySideBox.IsChecked = s.RecordKeySide;
         SnapBox.IsChecked = s.SnapEnabled;
         ShortcutButton.IsEnabled = SnapStyleBox.IsEnabled = s.SnapEnabled;
         ArrangeBox.IsChecked = s.ArrangeEnabled;
@@ -62,7 +63,8 @@ public partial class SettingsWindow : Window
         Closed += (_, _) =>
         {
             StopRecording(commit: false);
-            _controller.Reload(); // drop any unsaved live preview (ring size)
+            try { _controller.Reload(); } // drop any unsaved live preview (ring size)
+            catch (ArgumentException) { } // settings.json was hand-edited to a bad key; keep the running shortcuts
         };
     }
 
@@ -139,16 +141,11 @@ public partial class SettingsWindow : Window
         if (!_recording) return;
         e.Handled = true;
 
-        var key = e.Key switch
-        {
-            Key.System => e.SystemKey,
-            Key.ImeProcessed => e.ImeProcessedKey,
-            _ => e.Key,
-        };
+        var key = RealKey(e);
 
         if (key == Key.Escape && _recorded.Count == 0) { StopRecording(commit: false); return; }
 
-        string? name = NameOf(key);
+        string? name = NameOf(key, KeySideBox.IsChecked == true);
         if (name == null) return;
         _down.Add(key);
         if (!_recorded.Contains(name)) _recorded.Add(name);
@@ -159,19 +156,26 @@ public partial class SettingsWindow : Window
     {
         if (!_recording) return;
         e.Handled = true;
-        _down.Remove(e.Key == Key.System ? e.SystemKey : e.Key);
+        _down.Remove(RealKey(e));
         if (_down.Count == 0 && _recorded.Count > 0) StopRecording(commit: true);
     }
 
-    /// <summary>Modifiers become side-agnostic aliases; everything else uses its Windows Forms key name.</summary>
-    static string? NameOf(Key key)
+    static Key RealKey(KeyEventArgs e) => e.Key switch
+    {
+        Key.System => e.SystemKey,
+        Key.ImeProcessed => e.ImeProcessedKey,
+        _ => e.Key,
+    };
+
+    /// <summary>Modifiers become aliases, of either side or of <paramref name="side"/> only; everything else uses its Windows Forms key name.</summary>
+    static string? NameOf(Key key, bool side)
     {
         switch (key)
         {
-            case Key.LeftAlt or Key.RightAlt: return "Alt";
-            case Key.LeftCtrl or Key.RightCtrl: return "Ctrl";
-            case Key.LeftShift or Key.RightShift: return "Shift";
-            case Key.LWin or Key.RWin: return "Win";
+            case Key.LeftAlt or Key.RightAlt: return !side ? "Alt" : key == Key.LeftAlt ? "LAlt" : "RAlt";
+            case Key.LeftCtrl or Key.RightCtrl: return !side ? "Ctrl" : key == Key.LeftCtrl ? "LCtrl" : "RCtrl";
+            case Key.LeftShift or Key.RightShift: return !side ? "Shift" : key == Key.LeftShift ? "LShift" : "RShift";
+            case Key.LWin or Key.RWin: return !side ? "Win" : key == Key.LWin ? "LWin" : "RWin";
         }
         int vk = KeyInterop.VirtualKeyFromKey(key);
         return vk == 0 ? null : ((System.Windows.Forms.Keys)vk).ToString();
@@ -183,6 +187,7 @@ public partial class SettingsWindow : Window
         {
             TriggerKeys = _triggerKeys,
             ArrangeKeys = _arrangeKeys,
+            RecordKeySide = KeySideBox.IsChecked == true,
             SnapEnabled = SnapBox.IsChecked == true,
             ArrangeEnabled = ArrangeBox.IsChecked == true,
             SnapActivation = (ActivationStyle)Math.Max(0, SnapStyleBox.SelectedIndex),
@@ -203,6 +208,7 @@ public partial class SettingsWindow : Window
             s.Save();
             _controller.Reload();
             Startup.Set(StartupBox.IsChecked == true);
+            StartupBox.IsChecked = Startup.IsEnabled;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {

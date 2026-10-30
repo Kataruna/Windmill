@@ -88,6 +88,21 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Left and right keys are different"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Turn on, then record a shortcut, to use only one side's Ctrl, Alt, Shift or Win. Applies to both shortcuts. Shortcuts you already have stay as they are until you record them again."/>
+                        </StackPanel>
+                        <CheckBox x:Name="KeySideBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource CardTitle}" Text="Snap menu behavior"/>
                             <TextBlock Style="{StaticResource CardCaption}"
                                        Text="Hold: open while held, release to snap. Toggle: tap to open, then click a zone (or press the shortcut or Enter) to snap."/>
@@ -221,7 +236,7 @@
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource CardTitle}" Text="Snap style"/>
                             <TextBlock Style="{StaticResource CardCaption}"
-                                       Text="Native: halves and quarters use real Windows snap (needs gap 0), and every snapped window returns to its old size when dragged away. Classic: just move and resize."/>
+                                       Text="Native: halves use real Windows snap (needs gap 0), and every snapped window returns to its old size when dragged away. Classic: just move and resize."/>
                         </StackPanel>
                         <ComboBox x:Name="SnapModeBox" Grid.Column="1" MinWidth="140" Margin="16,0,0,0" VerticalAlignment="Center">
                             <ComboBoxItem Content="Native"/>
