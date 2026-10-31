@@ -53,17 +53,22 @@ internal sealed class InputHook : IDisposable
         }
     }
 
+    static readonly int VkOffset = (int)Marshal.OffsetOf<Native.KBDLLHOOKSTRUCT>(nameof(Native.KBDLLHOOKSTRUCT.vkCode));
+    static readonly int FlagsOffset = (int)Marshal.OffsetOf<Native.KBDLLHOOKSTRUCT>(nameof(Native.KBDLLHOOKSTRUCT.flags));
+
     IntPtr KeyboardProc(int code, IntPtr wParam, IntPtr lParam)
     {
         if (code >= 0)
         {
-            var data = Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
-            if ((data.flags & Native.LLKHF_INJECTED) == 0)
+            // Every keypress on the system comes through here, so read just the two fields instead of
+            // PtrToStructure, which boxes a copy of the whole struct each time.
+            uint flags = (uint)Marshal.ReadInt32(lParam, FlagsOffset);
+            if ((flags & Native.LLKHF_INJECTED) == 0)
             {
                 int msg = (int)wParam;
                 bool down = msg is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN;
                 bool up = msg is Native.WM_KEYUP or Native.WM_SYSKEYUP;
-                if ((down || up) && Key?.Invoke((int)data.vkCode, down) == true)
+                if ((down || up) && Key?.Invoke(Marshal.ReadInt32(lParam, VkOffset), down) == true)
                     return (IntPtr)1;
             }
         }

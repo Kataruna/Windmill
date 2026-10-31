@@ -229,6 +229,53 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool IsHungAppWindow(IntPtr hWnd);
 
+    // Copying part of the screen at a smaller size (the blur behind the menu).
+    public const int HALFTONE = 4;
+    public const uint SRCCOPY = 0x00CC0020;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    public static extern int SetStretchBltMode(IntPtr hdc, int mode);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool SetBrushOrgEx(IntPtr hdc, int x, int y, IntPtr previous);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool StretchBlt(IntPtr dst, int dx, int dy, int dw, int dh,
+        IntPtr src, int sx, int sy, int sw, int sh, uint rop);
+
+    // A process's exe name without listing every process on the system.
+    public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool QueryFullProcessImageName(IntPtr process, uint flags, char[] name, ref int size);
+
+    /// <summary>The exe's name without ".exe", as Process.ProcessName gives it; empty if the process can't be opened.</summary>
+    public static string ProcessName(uint pid)
+    {
+        IntPtr p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (p == IntPtr.Zero) return "";
+        try
+        {
+            var buf = new char[1024];
+            int size = buf.Length;
+            if (!QueryFullProcessImageName(p, 0, buf, ref size)) return "";
+            return System.IO.Path.GetFileNameWithoutExtension(new string(buf, 0, size));
+        }
+        finally { CloseHandle(p); }
+    }
+
     public static string TextOf(IntPtr hWnd)
     {
         int len = GetWindowTextLength(hWnd);
