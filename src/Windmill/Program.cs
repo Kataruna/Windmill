@@ -36,16 +36,28 @@ internal static class Program
 
         using var tray = BuildTray(controller, app);
         if (args.Contains("--settings")) ShowSettings(controller);
+        TrimWhenIdle();
         app.Run();
         controller.Dispose();
     }
+
+    // Drop startup/WPF pages that are never touched again; they fault back in on demand. ponytail: one-shot, not periodic.
+    static void TrimWhenIdle()
+    {
+        var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        t.Tick += (_, _) => { t.Stop(); GC.Collect(); EmptyWorkingSet(System.Diagnostics.Process.GetCurrentProcess().Handle); };
+        t.Start();
+    }
+
+    [System.Runtime.InteropServices.DllImport("psapi.dll")]
+    static extern bool EmptyWorkingSet(IntPtr process);
 
     static void ShowSettings(Controller controller)
     {
         if (_settingsWindow == null)
         {
             _settingsWindow = new SettingsWindow(controller);
-            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            _settingsWindow.Closed += (_, _) => { _settingsWindow = null; TrimWhenIdle(); };
             _settingsWindow.Show();
         }
         _settingsWindow.Activate();
