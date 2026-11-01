@@ -17,7 +17,10 @@ internal sealed class Controller : IDisposable
     readonly InputHook _hook = new();
     readonly OverlayWindow _overlay = new();
     readonly DispatcherTimer _holdTimer = new();
-    readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromMilliseconds(15) };
+    // Samples the cursor. The default (Background) priority runs behind input and rendering, so a busy frame delays it,
+    // and a 15 ms period beats against the ~16.7 ms frame; sample faster and ahead of rendering so each frame sees a
+    // fresh cursor position. Redraws are still skipped when nothing changed (see OverlayWindow.Surface.Present).
+    readonly DispatcherTimer _pollTimer = new(DispatcherPriority.Input) { Interval = TimeSpan.FromMilliseconds(6) };
     readonly DispatcherTimer _trimTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
 
