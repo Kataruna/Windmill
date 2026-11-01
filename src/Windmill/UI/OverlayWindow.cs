@@ -133,8 +133,7 @@ internal sealed class OverlayWindow : Window
     sealed class Surface : FrameworkElement
     {
         const double FadeMs = 160, OpenMs = 300, StaggerMs = 22, CloseMs = 150, SettledMs = 2000;
-        const double HoverRate = 36, FollowRate = 18; // exponential approach speeds, 1/s
-        const double NeedleRate = 70;                 // the needle tracks the cursor, so it must keep up with it
+        const double HoverRate = 90, FollowRate = 18; // exponential approach speeds, 1/s
 
         public Action? Dismissed;
         public bool Blur;
@@ -496,9 +495,9 @@ internal sealed class OverlayWindow : Window
                 double dist = Math.Sqrt(dx * dx + dy * dy);
                 double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
                 double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
-                double delta = Wrap180(angle - _needleAngle); // turn the short way round
                 // Degrees, so scale down: a tenth of a degree is the smallest visible turn.
-                double turned = _needleAlpha < 0.05 ? angle : _needleAngle + delta * Approach(dt, NeedleRate);
+                // No smoothing: any easing makes the needle trail the cursor by (angular speed x time constant) when circling.
+                double turned = angle;
                 _motion = Math.Max(_motion, Math.Abs(Wrap180(turned - _needleAngle)) * 0.02);
                 // Kept in [-180, 180) so it can't wind up over many turns; drawing it is the same either way.
                 _needleAngle = Wrap180(turned);
