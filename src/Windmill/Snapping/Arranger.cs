@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -57,7 +56,7 @@ internal static class Arranger
     {
         var result = new List<ArrangeCard>();
         uint self = (uint)Environment.ProcessId;
-        var names = ProcessNames();
+        var names = new Dictionary<uint, string>(); // per process, as an app often has several windows
         Native.EnumWindows((h, _) =>
         {
             if (IsCandidate(h, self, includeMinimized: monitor != IntPtr.Zero)
@@ -164,22 +163,14 @@ internal static class Arranger
         return pid != self && Native.GetWindowTextLength(h) > 0;
     }
 
-    /// <summary>Every process's name by id, read once: looking one up by id lists all of them each time.</summary>
-    static Dictionary<uint, string> ProcessNames()
-    {
-        var names = new Dictionary<uint, string>();
-        foreach (var p in Process.GetProcesses())
-        {
-            names[(uint)p.Id] = p.ProcessName;
-            p.Dispose();
-        }
-        return names;
-    }
-
+    /// <summary>
+    /// The window's process name. Asked of just that process: Process.GetProcesses() builds an object for every
+    /// process on the system, on the thread that runs the keyboard hook.
+    /// </summary>
     static string AppName(IntPtr h, Dictionary<uint, string> names)
     {
         Native.GetWindowThreadProcessId(h, out uint pid);
-        var name = names.GetValueOrDefault(pid, ""); // missing: started after the list was read
+        if (!names.TryGetValue(pid, out var name)) names[pid] = name = Native.ProcessName(pid); // "" if it can't be opened
         return name == "ApplicationFrameHost" ? "" : name;
     }
 

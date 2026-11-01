@@ -268,11 +268,28 @@ internal sealed class OverlayWindow : Window
             const int Down = 4; // blur a quarter-size copy: much cheaper, and scaling it back up softens it further
             try
             {
-                using var shot = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-                using (var g = System.Drawing.Graphics.FromImage(shot))
-                    g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h));
+                // Shrink while copying, straight from the screen: no full-size copy to allocate and scale down after.
+                // HALFTONE averages the pixels it drops, so the small copy doesn't shimmer. Plain SRCCOPY, like
+                // CopyFromScreen, leaves out layered windows such as this overlay.
                 int sw = Math.Max(1, w / Down), sh = Math.Max(1, h / Down);
-                using var small = new System.Drawing.Bitmap(shot, sw, sh);
+                using var small = new System.Drawing.Bitmap(sw, sh, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                using (var g = System.Drawing.Graphics.FromImage(small))
+                {
+                    IntPtr dst = g.GetHdc();
+                    IntPtr screen = Native.GetDC(IntPtr.Zero);
+                    try
+                    {
+                        if (screen == IntPtr.Zero) return null;
+                        Native.SetStretchBltMode(dst, Native.HALFTONE);
+                        Native.SetBrushOrgEx(dst, 0, 0, IntPtr.Zero); // required after choosing HALFTONE
+                        if (!Native.StretchBlt(dst, 0, 0, sw, sh, screen, x, y, w, h, Native.SRCCOPY)) return null;
+                    }
+                    finally
+                    {
+                        if (screen != IntPtr.Zero) Native.ReleaseDC(IntPtr.Zero, screen);
+                        g.ReleaseHdc(dst);
+                    }
+                }
                 var data = small.LockBits(new System.Drawing.Rectangle(0, 0, sw, sh),
                     System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
                 var px = new int[sw * sh];
@@ -344,7 +361,7 @@ internal sealed class OverlayWindow : Window
             _pick = new double[n];
             _thumb = new double[n];
             _thumbSeen = new ImageSource?[n];
-            _text.Clear();
+            ClearCaches();
             _badge = new int[n];
             _previewAlpha = 0;
             Array.Clear(_slotAlpha);
@@ -394,7 +411,7 @@ internal sealed class OverlayWindow : Window
                 // Nothing here is needed until the next menu; the redraw lets go of what the last frame drew.
                 _state = null;
                 _backdrop = null;
-                _text.Clear();
+                ClearCaches();
                 InvalidateVisual();
                 return;
             }
@@ -536,7 +553,7 @@ internal sealed class OverlayWindow : Window
             var r = _preview;
             r.Inflate(-14 * s * (1 - _previewAlpha), -14 * s * (1 - _previewAlpha)); // grows into place
             dc.PushOpacity(_previewAlpha);
-            DrawZoneRect(dc, r, s, Brush(WithAlpha(accent, 90)), new Pen(Brush(accent), 2 * s), 10 * s);
+            DrawZoneRect(dc, r, s, Brush(WithAlpha(accent, 90)), Stroke(accent, 2 * s), 10 * s);
             dc.Pop();
         }
 
@@ -558,10 +575,10 @@ internal sealed class OverlayWindow : Window
             var bg = Color.FromArgb(PanelAlpha, 28, 28, 34);
             var iconIdle = Color.FromArgb(70, 255, 255, 255);
             var lineIdle = Color.FromArgb(150, 255, 255, 255);
-            var edge = new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s);
+            var edge = Stroke(Color.FromArgb(28, 255, 255, 255), 1 * s);
 
             // The centre is intentionally empty: a faint ring marks the dead zone, a needle shows where the cursor points.
-            dc.DrawEllipse(null, new Pen(Brush(Color.FromArgb(70, 255, 255, 255)), 1.5 * s), o, inner - 4 * s, inner - 4 * s);
+            dc.DrawEllipse(null, Stroke(Color.FromArgb(70, 255, 255, 255), 1.5 * s), o, inner - 4 * s, inner - 4 * s);
             dc.DrawEllipse(Brush(Color.FromArgb((byte)(140 * (1 - _needleAlpha)), 255, 255, 255)), null, o, 3 * s, 3 * s);
             if (_needleAlpha > 0.01)
             {
@@ -574,8 +591,7 @@ internal sealed class OverlayWindow : Window
                     ctx.ArcTo(Polar(o, nr, _needleAngle + 15), new Size(nr, nr), 0, false, SweepDirection.Counterclockwise, true, false);
                 }
                 needle.Freeze();
-                dc.DrawGeometry(null, new Pen(Brush(WithAlpha(accent, (byte)(230 * _needleAlpha))), 3.5 * s)
-                    { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, needle);
+                dc.DrawGeometry(null, Stroke(WithAlpha(accent, (byte)(230 * _needleAlpha)), 3.5 * s, round: true), needle);
             }
 
             int n = 0;
@@ -601,7 +617,7 @@ internal sealed class OverlayWindow : Window
 
                 double icon = (zone.Inner ? 0.6 : 1) * (1 + 0.12 * h) * grow * RadialMetrics.Scale;
                 DrawMiniMonitor(dc, Polar(o, (r0 + r1) / 2, a), zone.Rect, s * icon,
-                    new Pen(Brush(Mix(lineIdle, Colors.White, h)), 1.5 * s), Brush(Mix(iconIdle, Colors.White, h)));
+                    Stroke(Mix(lineIdle, Colors.White, h), 1.5 * s), Brush(Mix(iconIdle, Colors.White, h)));
                 dc.Pop();
             }
             dc.Pop();
@@ -661,12 +677,16 @@ internal sealed class OverlayWindow : Window
                 double k = Lerp(0.85, 1, p) * (1 + 0.03 * h);
                 dc.PushOpacity(p);
                 dc.PushTransform(new ScaleTransform(k, k, r.X + r.Width / 2, r.Y + r.Height / 2));
-                dc.DrawRoundedRectangle(Brush(Mix(idle, accent, h)), new Pen(Brush(Mix(idleLine, accent, h)), 1 * s), r, 6 * s, 6 * s);
+                dc.DrawRoundedRectangle(Brush(Mix(idle, accent, h)), Stroke(Mix(idleLine, accent, h), 1 * s), r, 6 * s, 6 * s);
 
-                var label = Cached((i + 1).ToString(CultureInfo.InvariantCulture), 13 * s,
-                    Color.FromArgb((byte)Lerp(170, 255, h), 255, 255, 255), s);
+                // Laid out once in white and faded with opacity, rather than once per step of the hover fade.
+                var label = Cached(Number(i + 1), 13 * s, Colors.White, s);
                 if (label.Width + 4 * s < r.Width && label.Height < r.Height)
+                {
+                    dc.PushOpacity(Lerp(170, 255, h) / 255);
                     dc.DrawText(label, new Point(r.X + (r.Width - label.Width) / 2, r.Y + (r.Height - label.Height) / 2));
+                    dc.Pop();
+                }
                 dc.Pop();
                 dc.Pop();
             }
@@ -697,10 +717,10 @@ internal sealed class OverlayWindow : Window
             double empty = 1 - _slotAlpha[0];
             if (empty > 0.01)
             {
-                var hint = Text("Click windows to arrange", 13 * s, Brush(Color.FromArgb((byte)(170 * empty), 255, 255, 255)), s);
-                hint.MaxTextWidth = ar.Map.Width - 16 * s;
-                hint.TextAlignment = TextAlignment.Center;
+                var hint = Cached("Click windows to arrange", 13 * s, Colors.White, s, Math.Max(1, ar.Map.Width - 16 * s), centered: true);
+                dc.PushOpacity(170 * empty / 255);
                 dc.DrawText(hint, new Point(ar.Map.X + 8 * s, ar.Map.Y + (ar.Map.Height - hint.Height) / 2));
+                dc.Pop();
             }
             for (int i = 0; i < _slot.Length; i++)
             {
@@ -745,7 +765,7 @@ internal sealed class OverlayWindow : Window
                 // Once six are picked, the rest dim to show they can't be added.
                 dc.PushOpacity(e * (full ? Lerp(0.45, 1, p) : 1));
                 dc.PushTransform(new ScaleTransform(k, k, r.X + r.Width / 2, r.Y + r.Height / 2));
-                dc.DrawRoundedRectangle(Brush(Mix(cardBg, cardHover, h)), new Pen(Brush(Mix(edge, accent, p)), (1 + 1.5 * p) * s),
+                dc.DrawRoundedRectangle(Brush(Mix(cardBg, cardHover, h)), Stroke(Mix(edge, accent, p), (1 + 1.5 * p) * s),
                     r, 10 * s, 10 * s);
 
                 // Snapshot area; the big icon stands in until the snapshot arrives, then cross-fades.
@@ -784,9 +804,8 @@ internal sealed class OverlayWindow : Window
                 {
                     var at = new Point(shot.Right - 14 * s, shot.Y + 14 * s);
                     double rad = 12 * s * EaseOutBack(p);
-                    dc.DrawEllipse(Brush(accent), new Pen(Brush(Color.FromArgb(200, 20, 20, 24)), 2 * s), at, rad, rad);
-                    var num = Text(_badge[i].ToString(CultureInfo.InvariantCulture), 12 * s, Brushes.White, s);
-                    num.SetFontWeight(FontWeights.SemiBold);
+                    dc.DrawEllipse(Brush(accent), Stroke(Color.FromArgb(200, 20, 20, 24), 2 * s), at, rad, rad);
+                    var num = Cached(Number(_badge[i]), 12 * s, Colors.White, s, bold: true);
                     dc.PushOpacity(p);
                     dc.DrawText(num, new Point(at.X - num.Width / 2, at.Y - num.Height / 2));
                     dc.Pop();
@@ -819,12 +838,12 @@ internal sealed class OverlayWindow : Window
         }
 
         /// <summary>The window's icon, or its first letter on a tile when it has none.</summary>
-        static void DrawAppIcon(DrawingContext dc, ArrangeCard card, Rect r, double s)
+        void DrawAppIcon(DrawingContext dc, ArrangeCard card, Rect r, double s)
         {
             if (card.Icon != null) { dc.DrawImage(card.Icon, r); return; }
             dc.DrawRoundedRectangle(Brush(Color.FromArgb(50, 255, 255, 255)), null, r, r.Width / 5, r.Width / 5);
             string letter = card.Title.Length > 0 ? card.Title[..1].ToUpper(CultureInfo.CurrentCulture) : "?";
-            var t = Text(letter, r.Height * 0.55, Brushes.White, s);
+            var t = Cached(letter, r.Height * 0.55, Colors.White, s);
             dc.DrawText(t, new Point(r.X + (r.Width - t.Width) / 2, r.Y + (r.Height - t.Height) / 2));
         }
 
@@ -844,7 +863,7 @@ internal sealed class OverlayWindow : Window
                 sh.Offset(0, 3 * i * s);
                 dc.DrawRoundedRectangle(Brush(Color.FromArgb(26, 0, 0, 0)), null, sh, radius + 4 * i * s, radius + 4 * i * s);
             }
-            dc.DrawRoundedRectangle(Brush(Color.FromArgb(alpha, 28, 28, 34)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
+            dc.DrawRoundedRectangle(Brush(Color.FromArgb(alpha, 28, 28, 34)), Stroke(Color.FromArgb(28, 255, 255, 255), 1 * s),
                 frame, radius, radius);
         }
 
@@ -896,7 +915,7 @@ internal sealed class OverlayWindow : Window
             var ft = Cached(text, size, Colors.White, s);
             var box = new Rect(centerTop.X - ft.Width / 2 - 14 * s, centerTop.Y - 4 * s, ft.Width + 28 * s, ft.Height + 8 * s);
             DrawBackdrop(dc, new RectangleGeometry(box, box.Height / 2, box.Height / 2));
-            dc.DrawRoundedRectangle(Brush(Color.FromArgb(_backdrop != null ? (byte)165 : (byte)210, 24, 24, 28)), new Pen(Brush(Color.FromArgb(28, 255, 255, 255)), 1 * s),
+            dc.DrawRoundedRectangle(Brush(Color.FromArgb(_backdrop != null ? (byte)165 : (byte)210, 24, 24, 28)), Stroke(Color.FromArgb(28, 255, 255, 255), 1 * s),
                 box, box.Height / 2, box.Height / 2);
             dc.DrawText(ft, new Point(box.X + 14 * s, box.Y + 4 * s));
         }
@@ -907,26 +926,78 @@ internal sealed class OverlayWindow : Window
             new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Ui, size, brush, pixelsPerDip);
 
         // Laying out text is the slowest part of a frame, and most of it doesn't change while a menu is open.
-        readonly Dictionary<(string, double, Color, double), FormattedText> _text = new();
+        readonly Dictionary<(string, double, Color, double, bool, bool), FormattedText> _text = new();
 
-        /// <summary>Text that stays the same from frame to frame; a <paramref name="maxWidth"/> keeps it to one trimmed line.</summary>
-        FormattedText Cached(string text, double size, Color color, double pixelsPerDip, double maxWidth = 0)
+        /// <summary>
+        /// Text that stays the same from frame to frame. A <paramref name="maxWidth"/> keeps it to one trimmed line, or
+        /// wraps it and centres each line when <paramref name="centered"/>.
+        /// </summary>
+        FormattedText Cached(string text, double size, Color color, double pixelsPerDip, double maxWidth = 0,
+            bool centered = false, bool bold = false)
         {
-            var key = (text, size, color, maxWidth);
+            var key = (text, size, color, maxWidth, centered, bold);
             if (_text.TryGetValue(key, out var ft)) return ft;
             ft = Text(text, size, Brush(color), pixelsPerDip);
+            if (bold) ft.SetFontWeight(FontWeights.SemiBold);
             if (maxWidth > 0)
             {
                 ft.MaxTextWidth = maxWidth;
-                ft.MaxLineCount = 1;
-                ft.Trimming = TextTrimming.CharacterEllipsis;
+                if (centered) ft.TextAlignment = TextAlignment.Center;
+                else
+                {
+                    ft.MaxLineCount = 1;
+                    ft.Trimming = TextTrimming.CharacterEllipsis;
+                }
             }
             return _text[key] = ft;
         }
 
+        // Zone and badge numbers, so drawing one doesn't format a new string each frame.
+        static readonly string?[] Numbers = new string?[33];
+
+        static string Number(int n) => n >= 0 && n < Numbers.Length
+            ? Numbers[n] ??= n.ToString(CultureInfo.InvariantCulture)
+            : n.ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>Lets go of the brushes, pens and text the last menu drew with.</summary>
+        void ClearCaches()
+        {
+            _text.Clear();
+            BrushCache.Clear();
+            PenCache.Clear();
+        }
+
         // ---- small maths ----
 
-        static SolidColorBrush Brush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+        // Every brush and pen is a native resource that WPF hands to its render thread and frees only when the managed
+        // object is finalized. A frame used to make dozens of new ones; now each colour (and width) is made once per
+        // menu and reused. Hover fades step through at most a few hundred colours, and the caches empty when the menu
+        // closes (or if one ever grows past MaxCached).
+        static readonly Dictionary<Color, SolidColorBrush> BrushCache = new();
+        static readonly Dictionary<(Color, double, bool), Pen> PenCache = new();
+        const int MaxCached = 1024;
+
+        static SolidColorBrush Brush(Color c)
+        {
+            if (BrushCache.TryGetValue(c, out var b)) return b;
+            if (BrushCache.Count >= MaxCached) BrushCache.Clear();
+            b = new SolidColorBrush(c);
+            b.Freeze();
+            return BrushCache[c] = b;
+        }
+
+        /// <summary>A frozen pen; <paramref name="round"/> gives it round caps.</summary>
+        static Pen Stroke(Color c, double thickness, bool round = false)
+        {
+            // Widths only matter to a hundredth of a pixel; rounding keeps animated ones from filling the cache.
+            var key = (c, Math.Round(thickness, 2), round);
+            if (PenCache.TryGetValue(key, out var pen)) return pen;
+            if (PenCache.Count >= MaxCached) PenCache.Clear();
+            pen = new Pen(Brush(c), key.Item2);
+            if (round) pen.StartLineCap = pen.EndLineCap = PenLineCap.Round;
+            pen.Freeze();
+            return PenCache[key] = pen;
+        }
 
         static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
 
