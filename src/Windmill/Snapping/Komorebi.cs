@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Windmill;
@@ -17,11 +18,20 @@ namespace Windmill;
 /// </summary>
 internal static class Komorebi
 {
+    // Listing processes reads every process and thread on the system (~7 ms and a lot of garbage), and every snap
+    // asks. ponytail: cached for 5 s, so a snap right after komorebi starts or stops can take the wrong path once.
+    static long _checkedAt = long.MinValue / 2;
+    static bool _running;
+
     public static bool IsRunning()
     {
+        long now = Environment.TickCount64;
+        if (now - Volatile.Read(ref _checkedAt) < 5000) return _running;
         var found = Process.GetProcessesByName("komorebi");
         foreach (var p in found) p.Dispose();
-        return found.Length > 0;
+        _running = found.Length > 0;
+        Volatile.Write(ref _checkedAt, now);
+        return _running;
     }
 
     static string? _cli;

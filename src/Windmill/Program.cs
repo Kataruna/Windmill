@@ -25,12 +25,7 @@ internal static class Program
         // the process: the keyboard hook, and with it every shortcut, would go too. Logged, and Windmill carries on.
         app.DispatcherUnhandledException += (_, e) =>
         {
-            try
-            {
-                System.IO.File.AppendAllText(System.IO.Path.Combine(Settings.Directory, "error.log"),
-                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {e.Exception}{Environment.NewLine}");
-            }
-            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+            LogError(e.Exception);
             e.Handled = true;
         };
 
@@ -48,16 +43,30 @@ internal static class Program
 
         using var tray = BuildTray(controller, app);
         if (args.Contains("--settings")) ShowSettings(controller);
-        TrimWhenIdle();
+        TrimWhenIdle(then: controller.Warm);
         app.Run();
         controller.Dispose();
     }
 
+    /// <summary>Appends to %APPDATA%\Windmill\error.log; past about 1 MB it becomes error.log.old, so an error repeating every frame can't fill the disk.</summary>
+    internal static void LogError(Exception error)
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(Settings.Directory, "error.log");
+            var file = new System.IO.FileInfo(path);
+            if (file.Exists && file.Length > 1 << 20) System.IO.File.Move(path, path + ".old", overwrite: true);
+            System.IO.Directory.CreateDirectory(Settings.Directory);
+            System.IO.File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {error}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+    }
+
     // Drop startup/WPF pages that are never touched again; they fault back in on demand. ponytail: one-shot, not periodic.
-    static void TrimWhenIdle()
+    static void TrimWhenIdle(Action? then = null)
     {
         var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        t.Tick += (_, _) => { t.Stop(); GC.Collect(); EmptyWorkingSet(System.Diagnostics.Process.GetCurrentProcess().Handle); };
+        t.Tick += (_, _) => { t.Stop(); GC.Collect(); EmptyWorkingSet(System.Diagnostics.Process.GetCurrentProcess().Handle); then?.Invoke(); };
         t.Start();
     }
 

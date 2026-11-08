@@ -417,7 +417,8 @@ internal static class Native
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IVirtualDesktopManager
     {
-        [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow, out bool onCurrentDesktop);
+        // BOOL, 4 bytes; a COM bool defaults to the 2-byte VARIANT_BOOL, which the 4-byte write would overrun.
+        [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow, [MarshalAs(UnmanagedType.Bool)] out bool onCurrentDesktop);
         [PreserveSig] int GetWindowDesktopId(IntPtr topLevelWindow, out Guid desktopId);
         [PreserveSig] int MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
     }

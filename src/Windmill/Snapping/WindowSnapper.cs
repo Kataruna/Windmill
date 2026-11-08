@@ -185,9 +185,11 @@ internal static class WindowSnapper
     internal static bool Same(Native.RECT a, Native.RECT b) =>
         a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
 
+    static readonly int[] Modifiers = { 0x10, 0x11, 0x12, 0x5B, 0x5C }; // Shift, Ctrl, Alt, LWin, RWin
+
     static bool ModifierDown()
     {
-        foreach (int vk in new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }) // Shift, Ctrl, Alt, LWin, RWin
+        foreach (int vk in Modifiers)
             if ((Native.GetAsyncKeyState(vk) & 0x8000) != 0) return true;
         return false;
     }

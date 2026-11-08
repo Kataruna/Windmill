@@ -49,6 +49,11 @@ internal static class Arranger
     // Last snapshot of each window, shown immediately next time while a fresh one is captured. UI thread only.
     static readonly Dictionary<IntPtr, ImageSource> ThumbCache = new();
 
+    // Each window's icon, so reopening the menu doesn't ask every window again (up to 80 ms each). UI thread only.
+    // ponytail: kept while the window exists (a busy app's class icon too), so an app that changes its icon shows the
+    // old one; drop on change if that matters.
+    static readonly Dictionary<IntPtr, ImageSource> IconCache = new();
+
     /// <summary>
     /// Visible, non-minimized top-level app windows, front-most first. Given a monitor, only the windows on it and on
     /// the current virtual desktop, minimized ones included, except those in <paramref name="skip"/>.
@@ -70,7 +75,7 @@ internal static class Arranger
                 var app = AppName(h, names);
                 result.Add(new ArrangeCard
                 {
-                    Hwnd = h, Title = Native.TextOf(h), Icon = IconOf(h),
+                    Hwnd = h, Title = Native.TextOf(h), Icon = CachedIcon(h),
                     App = minimized ? (app.Length > 0 ? app + " · minimized" : "Minimized") : app,
                     Thumb = ThumbCache.GetValueOrDefault(h),
                 });
@@ -80,7 +85,17 @@ internal static class Arranger
 
         foreach (var gone in ThumbCache.Keys.Except(result.Select(c => c.Hwnd)).ToList())
             ThumbCache.Remove(gone);
+        foreach (var gone in IconCache.Keys.Where(h => !Native.IsWindow(h)).ToList())
+            IconCache.Remove(gone);
         return result;
+    }
+
+    static ImageSource? CachedIcon(IntPtr h)
+    {
+        if (IconCache.TryGetValue(h, out var icon)) return icon;
+        icon = IconOf(h);
+        if (icon != null) IconCache[h] = icon; // no icon at all: asked again next time
+        return icon;
     }
 
     /// <summary>

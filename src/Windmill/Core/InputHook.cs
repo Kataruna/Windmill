@@ -68,7 +68,7 @@ internal sealed class InputHook : IDisposable
                 int msg = (int)wParam;
                 bool down = msg is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN;
                 bool up = msg is Native.WM_KEYUP or Native.WM_SYSKEYUP;
-                if ((down || up) && Key?.Invoke(Marshal.ReadInt32(lParam, VkOffset), down) == true)
+                if ((down || up) && Guard(Key, Marshal.ReadInt32(lParam, VkOffset), down))
                     return (IntPtr)1;
             }
         }
@@ -81,17 +81,31 @@ internal sealed class InputHook : IDisposable
         {
             var data = Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam);
             int delta = (short)(data.mouseData >> 16);
-            if (Wheel?.Invoke(delta) == true)
+            if (Guard(Wheel, delta))
                 return (IntPtr)1;
         }
         else if (code >= 0 && (int)wParam is Native.WM_LBUTTONDOWN or Native.WM_LBUTTONUP
             // A tap on the menu reaches the overlay as touch (Controller.OnTouch); don't count it twice.
             && !Native.FromTouchOrPen(Marshal.PtrToStructure<Native.MSLLHOOKSTRUCT>(lParam).dwExtraInfo))
         {
-            if (Click?.Invoke((int)wParam == Native.WM_LBUTTONDOWN) == true)
+            if (Guard(Click, (int)wParam == Native.WM_LBUTTONDOWN))
                 return (IntPtr)1;
         }
         return Native.CallNextHookEx(_mouseHook, code, wParam, lParam);
+    }
+
+    // An exception can't unwind through the native hook call (the runtime would end the process, and every shortcut
+    // with it), so it's logged and the event passes on untouched.
+    static bool Guard<T>(Func<T, bool>? handler, T arg)
+    {
+        try { return handler?.Invoke(arg) == true; }
+        catch (Exception ex) { Program.LogError(ex); return false; }
+    }
+
+    static bool Guard<T1, T2>(Func<T1, T2, bool>? handler, T1 a, T2 b)
+    {
+        try { return handler?.Invoke(a, b) == true; }
+        catch (Exception ex) { Program.LogError(ex); return false; }
     }
 
     public void Dispose()

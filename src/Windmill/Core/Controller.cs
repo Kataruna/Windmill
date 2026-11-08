@@ -47,6 +47,7 @@ internal sealed class Controller : IDisposable
 
     IntPtr _target;
     IntPtr _hMonitor;
+    double _dpi = 1; // scale of _hMonitor, looked up once per menu instead of every poll
     Native.MONITORINFO _monitor;
     Point _origin;      // menu centre (cursor when it opened), physical screen pixels
     Rect _panel;        // miniature zone map, physical screen pixels
@@ -99,9 +100,6 @@ internal sealed class Controller : IDisposable
                 GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             });
         };
-        var warm = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        warm.Tick += (_, _) => { warm.Stop(); Warm(); };
-        warm.Start();
         ArrangeStore.Saved += () => _ui.BeginInvoke(ReloadLayouts);
         _hook.Key = OnKey;
         _hook.Wheel = OnWheel;
@@ -120,11 +118,13 @@ internal sealed class Controller : IDisposable
     /// <summary>Something the user should know about that doesn't stop Windmill from running. Raised on the UI thread.</summary>
     public event Action<string>? Warning;
     bool _warnedMouseHook;
+    bool _layoutsStale; // the custom layouts were saved while a menu was open
 
     /// <summary>The custom layouts changed: rebuild the snap menu's list, unless a menu is open on the old one.</summary>
     void ReloadLayouts()
     {
-        if (_state != State.Idle) return; // picked up by the next Reload or save instead
+        if (_state != State.Idle) { _layoutsStale = true; return; } // picked up when the menu closes
+        _layoutsStale = false;
         _layouts = Layouts.LoadAll(_settings);
         _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
     }
@@ -134,6 +134,7 @@ internal sealed class Controller : IDisposable
         // The layouts and shortcuts below may no longer match an open menu (Alt+F4 on the settings window, say).
         if (_state != State.Idle) { _holdTimer.Stop(); Close(snapped: false); }
         _settings = Settings.Load();
+        _layoutsStale = false;
         _layouts = Layouts.LoadAll(_settings);
         _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
         Arranger.Configure(_settings);
@@ -391,7 +392,7 @@ internal sealed class Controller : IDisposable
     {
         if (!_layouts[_layoutIndex].Radial)
             return new Point(_panel.X + _panel.Width * (0.5 + 0.45 * aim.X), _panel.Y + _panel.Height * (0.5 - 0.45 * aim.Y));
-        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double dpi = _dpi;
         double r = (aim.Full ? (RadialMetrics.Inner + RadialMetrics.Split) / 2 : (RadialMetrics.RingStart + RadialMetrics.Outer) / 2) * dpi;
         double a = aim.Full ? Math.PI / 2 : Math.Atan2(aim.Y, aim.X);
         return new Point(_origin.X + r * Math.Cos(a), _origin.Y - r * Math.Sin(a));
@@ -427,6 +428,8 @@ internal sealed class Controller : IDisposable
 
         _dbgT1 = Stopwatch.GetTimestamp(); // [DEBUG-7c1e]
         _target = hwnd;
+        // Refresh komorebi's cached running state while the menu is up, so the snap doesn't wait on it.
+        if (_settings.KomorebiIntegration) _ = Task.Run(Komorebi.IsRunning);
         Native.GetCursorPos(out var pt);
         var at = pt;
         Point? noCursor = null;
@@ -471,13 +474,15 @@ internal sealed class Controller : IDisposable
         // has put away on its other workspaces. List them before the overlay appears so it can't count itself.
         bool komorebi = parked != null;
         var cards = komorebi ? Arranger.FindWindows(hMon, parked) : Arranger.FindWindows();
+        // Listing waits on other windows, and the keyboard hook runs meanwhile: the shortcut may be gone already.
+        if (_state != State.Pending || _mode != Mode.Arrange) return;
         if (cards.Count == 0) { _state = State.Idle; Block(); return; }
         _arrangeShown = komorebi ? cards.Select(c => c.Hwnd).ToList() : null;
 
         SetMonitor(hMon);
         var mon = _monitor.rcMonitor;
         var work = _monitor.rcWork;
-        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double dpi = _dpi;
         _arrange = Arranger.Plan(cards, new Rect(work.Left - mon.Left, work.Top - mon.Top, work.Width, work.Height), dpi);
         _captures = new CancellationTokenSource();
         // About the size they're drawn at, in physical pixels; each stays cached while its window exists.
@@ -598,6 +603,7 @@ internal sealed class Controller : IDisposable
         _arrange = null; // its icons and snapshots aren't needed between menus
         _arrangeShown = null;
         _overlay.Dismiss(snapped);
+        if (_layoutsStale) _ui.BeginInvoke(ReloadLayouts); // reads files; this may be the keyboard hook
         TrimSoon();
     }
 
@@ -629,7 +635,7 @@ internal sealed class Controller : IDisposable
     {
         var mon = _monitor.rcMonitor;
         var work = _monitor.rcWork;
-        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double dpi = _dpi;
         double k = MiniMetrics.Size * dpi / Math.Max(work.Width, work.Height);
         double w = work.Width * k, h = work.Height * k;
         double m = MiniMetrics.Margin * dpi;
@@ -643,6 +649,7 @@ internal sealed class Controller : IDisposable
     void SetMonitor(IntPtr hMon)
     {
         _hMonitor = hMon;
+        _dpi = Native.GetDpiForMonitor(hMon);
         _monitor = Native.GetMonitor(hMon);
         _overlay.PlaceOn(_monitor.rcMonitor);
     }
@@ -702,7 +709,8 @@ internal sealed class Controller : IDisposable
     /// Draws one invisible frame at startup. The first frame of a process (WPF's layered-window render path, JIT, the
     /// font and brush caches) took 80-800 ms, and it was paid by the first real activation, worst after a restart.
     /// </summary>
-    void Warm()
+    /// <remarks>Called by Program once the startup trim is done, which would otherwise page out what this touched.</remarks>
+    internal void Warm()
     {
         if (_state != State.Idle) return;
         var t0 = Stopwatch.GetTimestamp();
@@ -743,7 +751,7 @@ internal sealed class Controller : IDisposable
 
     int PickRadial(Layout layout, Native.POINT pt)
     {
-        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double dpi = _dpi;
         double dx = pt.X - _origin.X, dy = _origin.Y - pt.Y;
         double dist = Math.Sqrt(dx * dx + dy * dy);
 
@@ -770,7 +778,7 @@ internal sealed class Controller : IDisposable
 
     int PickMini(Layout layout, Native.POINT pt)
     {
-        double dpi = Native.GetDpiForMonitor(_hMonitor);
+        double dpi = _dpi;
         double dx = pt.X - _origin.X, dy = pt.Y - _origin.Y;
         if (!_moved && dx * dx + dy * dy < 144 * dpi * dpi) return -1; // same 12px dead zone as the radial
         _moved = true;

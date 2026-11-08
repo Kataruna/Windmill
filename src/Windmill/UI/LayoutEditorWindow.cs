@@ -191,17 +191,9 @@ internal sealed class LayoutEditorWindow : Window
         _canvas.MouseMove += (_, e) => { if (_cutMode) { _cutAt = e.GetPosition(_canvas); ShowCut(); } };
         _canvas.MouseLeave += (_, _) => { _cutAt = null; ShowCut(); };
         PreviewKeyUp += (_, e) => { if (_cutMode && e.Key is Key.LeftShift or Key.RightShift) ShowCut(); };
-        _canvas.MouseLeftButtonUp += (_, _) =>
-        {
-            if (_drag == null) return;
-            var node = _drag.Value.node;
-            _drag = null;
-            _canvas.ReleaseMouseCapture();
-            if (node.Ratio == _dragStart) { Render(); return; } // a click on a handle isn't an edit
-            _undo.Push(_dragBefore);
-            _redo.Clear();
-            Changed(keep: _selected);
-        };
+        _canvas.MouseLeftButtonUp += (_, _) => EndDrag();
+        // Alt+Tab, a UAC prompt or a message box can take the mouse mid-drag, and no button-up follows.
+        _canvas.LostMouseCapture += (_, _) => EndDrag();
         PreviewKeyDown += OnKey;
         _nameBox.GotKeyboardFocus += (_, _) => _nameBefore = (ArrangeStore.Serialize(_work), _list.SelectedIndex);
         _nameBox.TextChanged += (_, _) =>
@@ -844,6 +836,18 @@ internal sealed class LayoutEditorWindow : Window
         leaf.A = new SplitNode { Index = leaf.Index };
         leaf.B = new SplitNode { Index = count };
         Changed(keep: null);
+    }
+
+    void EndDrag()
+    {
+        if (_drag == null) return;
+        var node = _drag.Value.node;
+        _drag = null; // first: releasing capture below raises LostMouseCapture, which comes back here
+        _canvas.ReleaseMouseCapture();
+        if (node.Ratio == _dragStart) { Render(); return; } // a click on a handle isn't an edit
+        _undo.Push(_dragBefore);
+        _redo.Clear();
+        Changed(keep: _selected);
     }
 
     void OnDragMove(object sender, MouseEventArgs e)
