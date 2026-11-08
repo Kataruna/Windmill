@@ -42,10 +42,21 @@ internal static class WindowSnapper
     public static void Snap(IntPtr hwnd, Native.RECT work, Zone zone, int gap, SnapStyle style, bool snapAssist)
     {
         int generation = NextGeneration(hwnd);
-        if (style == SnapStyle.Native && gap == 0 && !zone.Maximize && Native.CanDetectSnap && ArrowFor(zone.Rect) is { } arrow)
-            _ = SnapNativeAsync(hwnd, work, zone, arrow, snapAssist, generation);
+        // Only one native snap at a time: stacked Win+Arrow / Esc injections while Explorer is still building or
+        // closing Snap Assist crashed Explorer (Windows.UI.Xaml.dll). Overlapping ones are placed by hand instead.
+        if (!_nativeBusy && style == SnapStyle.Native && gap == 0 && !zone.Maximize && Native.CanDetectSnap && ArrowFor(zone.Rect) is { } arrow)
+            _ = RunNativeAsync(hwnd, work, zone, arrow, snapAssist, generation);
         else
             Place(hwnd, work, zone, gap, remember: style == SnapStyle.Native);
+    }
+
+    static bool _nativeBusy; // UI thread only
+
+    static async Task RunNativeAsync(IntPtr hwnd, Native.RECT work, Zone zone, ushort arrow, bool snapAssist, int generation)
+    {
+        _nativeBusy = true;
+        try { await SnapNativeAsync(hwnd, work, zone, arrow, snapAssist, generation); }
+        finally { _nativeBusy = false; }
     }
 
     /// <summary>The Win+Arrow that puts a restored window into <paramref name="r"/>, or null if no single press does.</summary>

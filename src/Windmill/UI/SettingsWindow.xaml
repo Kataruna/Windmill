@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         ThemeMode="System"
         Title="Windmill Settings"
-        Width="600" Height="680" MinWidth="440" MinHeight="420"
+        Width="780" Height="660" MinWidth="440" MinHeight="420"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="14">
 
@@ -32,23 +32,76 @@
             <Setter Property="Margin" Value="2,20,0,8"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         </Style>
+        <!-- Categories in a plain list on the left, the page on the right. The themed tab strip clips its items. -->
+        <Style TargetType="TabControl">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel IsItemsHost="True" Margin="0,0,12,0"/>
+                            <ContentPresenter Grid.Column="1" ContentSource="SelectedContent"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Category list on the left, like Windows Settings: rounded highlight with an accent bar on the selected one. -->
+        <Style TargetType="TabItem">
+            <Setter Property="MinWidth" Value="176"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" CornerRadius="6" Padding="16,9,12,9" Background="Transparent" Cursor="Hand">
+                            <Grid>
+                                <Border x:Name="Bar" Width="3" Height="16" CornerRadius="1.5" Margin="-12,0,0,0"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Hidden"
+                                        Background="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <ContentPresenter x:Name="Header" ContentSource="Header" VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                                <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+                                <!-- On the label only: the tab's own FontWeight would carry into the whole page. -->
+                                <Setter TargetName="Header" Property="TextElement.FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Background="{DynamicResource ApplicationBackgroundBrush}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="32,24,32,16">
-                <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                <TextBlock Style="{StaticResource CardCaption}" FontSize="14"
-                           Text="Hold your shortcut over a window, move toward a zone, then release to snap."/>
+        <StackPanel Margin="32,24,32,8">
+            <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <TextBlock Style="{StaticResource CardCaption}" FontSize="14"
+                       Text="Hold your shortcut over a window, move toward a zone, then release to snap."/>
+        </StackPanel>
 
-                <TextBlock Style="{StaticResource SectionHeader}" Text="Activation"/>
-
+        <TabControl Grid.Row="1" Margin="24,4,12,0">
+            <TabItem Header="Snap menu">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,16,24,16">
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -156,8 +209,28 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Style="{StaticResource SectionHeader}" Text="Auto-arrange"/>
-
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Layouts in the snap menu"/>
+                            <TextBlock Style="{StaticResource CardCaption}" x:Name="LayoutsCaption"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <CheckBox x:Name="SnapCustomBox" Content="Custom layouts"/>
+                            <CheckBox x:Name="FancyZonesBox" Content="FancyZones layouts" Margin="0,6,0,0"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Auto-arrange">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,16,24,16">
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -190,6 +263,7 @@
                     </Grid>
                 </Border>
 
+
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -208,8 +282,6 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Style="{StaticResource SectionHeader}" Text="Appearance"/>
-
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -217,16 +289,21 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource CardTitle}" Text="Blur behind menu"/>
-                            <TextBlock Style="{StaticResource CardCaption}"
-                                       Text="Frosted glass behind the snap ring and zone panel. It's a snapshot taken when the menu opens, so video behind it pauses until the menu closes."/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Layouts in auto-arrange"/>
+                            <TextBlock Style="{StaticResource CardCaption}" Text="Extra layouts to scroll through. Each is offered when you have picked as many windows as it has zones. Built-in layouts are always there."/>
                         </StackPanel>
-                        <CheckBox x:Name="BlurBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <CheckBox x:Name="ArrangeCustomBox" Content="Custom layouts"/>
+                            <CheckBox x:Name="ArrangeFancyZonesBox" Content="FancyZones layouts" Margin="0,6,0,0"/>
+                        </StackPanel>
                     </Grid>
                 </Border>
-
-                <TextBlock Style="{StaticResource SectionHeader}" Text="Windows"/>
-
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Layouts &amp; windows">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,16,24,16">
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -288,10 +365,12 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource CardTitle}" Text="PowerToys FancyZones layouts"/>
-                            <TextBlock x:Name="LayoutsCaption" Style="{StaticResource CardCaption}"/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Custom layouts"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Draw your own layouts. Choose where they appear on the Snap menu and Auto-arrange tabs."/>
                         </StackPanel>
-                        <CheckBox x:Name="FancyZonesBox" Grid.Column="1" Content="Include" Margin="16,0,0,0"/>
+                        <Button Grid.Column="1" MinWidth="140" Padding="16,6" Margin="16,0,0,0" Content="Edit layouts..."
+                                VerticalAlignment="Center" Click="OnEditArrangeLayouts"/>
                     </Grid>
                 </Border>
 
@@ -309,9 +388,26 @@
                         <CheckBox x:Name="KomorebiBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
                     </Grid>
                 </Border>
-
-                <TextBlock Style="{StaticResource SectionHeader}" Text="General"/>
-
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24,16,24,16">
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Blur behind menu"/>
+                            <TextBlock Style="{StaticResource CardCaption}"
+                                       Text="Frosted glass behind the snap ring and zone panel. It's a snapshot taken when the menu opens, so video behind it pauses until the menu closes."/>
+                        </StackPanel>
+                        <CheckBox x:Name="BlurBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
+                    </Grid>
+                </Border>
                 <Border Style="{StaticResource Card}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -340,10 +436,12 @@
                         <CheckBox x:Name="UpdatesBox" Grid.Column="1" Content="Enable" Margin="16,0,0,0"/>
                     </Grid>
                 </Border>
-            </StackPanel>
-        </ScrollViewer>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
 
-        <Border Grid.Row="1" Padding="32,12" BorderThickness="0,1,0,0"
+        <Border Grid.Row="2" Padding="32,12" BorderThickness="0,1,0,0"
                 Background="{DynamicResource ControlFillColorDefaultBrush}"
                 BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
             <Grid>

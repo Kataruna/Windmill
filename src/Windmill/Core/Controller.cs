@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,9 +73,11 @@ internal sealed class Controller : IDisposable
         get
         {
             int fz = _layouts.Count(l => l.Name.StartsWith("FZ:", StringComparison.Ordinal));
-            return fz > 0
-                ? $"{_layouts.Count} layouts loaded, {fz} from PowerToys FancyZones"
-                : $"{_layouts.Count} layouts loaded";
+            int mine = _settings.SnapCustomLayouts ? ArrangeStore.All.Count : 0; // only those in the snap menu's list
+            var parts = new List<string> { $"{_layouts.Count} layouts loaded" };
+            if (mine > 0) parts.Add($"{mine} of your own");
+            if (fz > 0) parts.Add($"{fz} from PowerToys FancyZones");
+            return string.Join(", ", parts);
         }
     }
 
@@ -96,6 +99,10 @@ internal sealed class Controller : IDisposable
                 GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             });
         };
+        var warm = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        warm.Tick += (_, _) => { warm.Stop(); Warm(); };
+        warm.Start();
+        ArrangeStore.Saved += () => _ui.BeginInvoke(ReloadLayouts);
         _hook.Key = OnKey;
         _hook.Wheel = OnWheel;
         _hook.Click = OnClick;
@@ -114,6 +121,14 @@ internal sealed class Controller : IDisposable
     public event Action<string>? Warning;
     bool _warnedMouseHook;
 
+    /// <summary>The custom layouts changed: rebuild the snap menu's list, unless a menu is open on the old one.</summary>
+    void ReloadLayouts()
+    {
+        if (_state != State.Idle) return; // picked up by the next Reload or save instead
+        _layouts = Layouts.LoadAll(_settings);
+        _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
+    }
+
     public void Reload()
     {
         // The layouts and shortcuts below may no longer match an open menu (Alt+F4 on the settings window, say).
@@ -121,6 +136,7 @@ internal sealed class Controller : IDisposable
         _settings = Settings.Load();
         _layouts = Layouts.LoadAll(_settings);
         _layoutIndex = Math.Min(_layoutIndex, _layouts.Count - 1);
+        Arranger.Configure(_settings);
         _chord = _settings.SnapEnabled
             ? _settings.TriggerKeys.Select(ParseTrigger).ToArray()
             : Array.Empty<int[]>();
@@ -226,6 +242,7 @@ internal sealed class Controller : IDisposable
                     if (_state == State.Idle || _mode != m)
                     {
                         _mode = m;
+                        _dbgT0 = Stopwatch.GetTimestamp(); // [DEBUG-7c1e]
                         _state = State.Pending;
                         _holdTimer.Stop();
                         _holdTimer.Start();
@@ -282,7 +299,15 @@ internal sealed class Controller : IDisposable
     bool OnWheel(int delta)
     {
         if (_state != State.Active) return false;
-        if (_mode != Mode.Snap) return true; // keep the scroll from reaching the window underneath
+        if (_mode == Mode.Arrange)
+        {
+            _wheel += delta;
+            if (Math.Abs(_wheel) < WheelNotch) return true;
+            int dir = _wheel > 0 ? -1 : 1;
+            _wheel = 0;
+            _ui.BeginInvoke(() => CycleVariant(dir));
+            return true;
+        }
         // Touchpads and smooth wheels send small steps; one notch's worth changes the layout once.
         _wheel += delta;
         if (Math.Abs(_wheel) < WheelNotch) return true;
@@ -400,6 +425,7 @@ internal sealed class Controller : IDisposable
         var hwnd = Native.GetForegroundWindow();
         if (!WindowSnapper.IsSnappable(hwnd)) { _state = State.Idle; Block(); return; }
 
+        _dbgT1 = Stopwatch.GetTimestamp(); // [DEBUG-7c1e]
         _target = hwnd;
         Native.GetCursorPos(out var pt);
         var at = pt;
@@ -459,8 +485,15 @@ internal sealed class Controller : IDisposable
         Begin();
     }
 
+    long _lastUse;
+
     void Begin(Point? touch = null)
     {
+        // After a pause, start from the main wheel again instead of whichever layout was last cycled to.
+        long now = Environment.TickCount64;
+        if (now - _lastUse > 30_000) _layoutIndex = 0; // ponytail: fixed 30 s, make a setting if wanted
+        _lastUse = now;
+        _overlay.Opacity = 1; // Warm leaves it invisible
         _selected = -1;
         _wheel = 0;
         _touch = touch;
@@ -483,7 +516,9 @@ internal sealed class Controller : IDisposable
     {
         if (_state != State.Active || _arrange is not { } ar) return;
         var pt = Pointer();
-        int i = ar.HitTest(new Point(pt.X - _monitor.rcMonitor.Left, pt.Y - _monitor.rcMonitor.Top));
+        var at = new Point(pt.X - _monitor.rcMonitor.Left, pt.Y - _monitor.rcMonitor.Top);
+        if (ar.Close.Contains(at)) { Cancel(); return; }
+        int i = ar.HitTest(at);
         if (i < 0) return;
         if (!ar.Picked.Remove(i) && ar.Picked.Count < Arranger.MaxWindows) ar.Picked.Add(i);
         ar.Revision++;
@@ -516,6 +551,16 @@ internal sealed class Controller : IDisposable
             });
     }
 
+    void CycleVariant(int step)
+    {
+        if (_state != State.Active || _arrange is not { } ar) return;
+        int n = Arranger.VariantCount(ar.Picked.Count);
+        if (n < 2) return;
+        ar.Variant = (ar.Variant + step + n) % n;
+        ar.Revision++;
+        Update();
+    }
+
     void CommitArrange()
     {
         var windows = _arrange is { } ar ? ar.Picked.Select(i => ar.Cards[i].Hwnd).ToList() : new List<IntPtr>();
@@ -523,6 +568,7 @@ internal sealed class Controller : IDisposable
         int gap = _settings.Gap;
         bool remember = _settings.SnapStyle == SnapStyle.Native;
         var shown = _arrangeShown;
+        int variant = _arrange?.Variant ?? 0;
         Close(snapped: windows.Count > 0);
         if (windows.Count > 0)
             _ui.BeginInvoke(async () =>
@@ -530,7 +576,7 @@ internal sealed class Controller : IDisposable
                 // komorebi: only the picks stay on screen, in the order komorebi tiles them; any it doesn't tile are
                 // arranged as usual.
                 var rest = shown != null ? await Task.Run(() => Komorebi.ShowOnlyAsync(windows, shown)) : windows;
-                if (rest.Count > 0) Arranger.Arrange(rest, work, gap, remember);
+                if (rest.Count > 0) Arranger.Arrange(rest, work, gap, remember, variant);
             });
     }
 
@@ -616,7 +662,7 @@ internal sealed class Controller : IDisposable
 
     void Update()
     {
-        if (_state != State.Active) return;
+        if (_state != State.Active && !_warming) return;
         var layout = _layouts[_layoutIndex];
         var pt = Pointer();
 
@@ -627,6 +673,12 @@ internal sealed class Controller : IDisposable
         _selected = arrange != null ? arrange.HitTest(new Point(pt.X - mon.Left, pt.Y - mon.Top))
             : layout.Radial ? PickRadial(layout, pt) : PickMini(layout, pt);
 
+        if (arrange != null)
+        {
+            bool hot = arrange.Close.Contains(new Point(pt.X - mon.Left, pt.Y - mon.Top));
+            if (hot != arrange.CloseHot) { arrange.CloseHot = hot; arrange.Revision++; }
+        }
+        bool dbgFirst = _dbgT0 != 0; // [DEBUG-7c1e]
         _overlay.Render(new OverlayState
         {
             Layout = layout,
@@ -641,6 +693,52 @@ internal sealed class Controller : IDisposable
             Panel = new Rect(_panel.X - mon.Left, _panel.Y - mon.Top, _panel.Width, _panel.Height),
             Work = new Rect(work.Left - mon.Left, work.Top - mon.Top, work.Width, work.Height),
         });
+        if (dbgFirst) DbgLog(); // [DEBUG-7c1e]
+    }
+
+    bool _warming;
+
+    /// <summary>
+    /// Draws one invisible frame at startup. The first frame of a process (WPF's layered-window render path, JIT, the
+    /// font and brush caches) took 80-800 ms, and it was paid by the first real activation, worst after a restart.
+    /// </summary>
+    void Warm()
+    {
+        if (_state != State.Idle) return;
+        var t0 = Stopwatch.GetTimestamp();
+        Native.GetCursorPos(out var pt);
+        SetMonitor(Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST));
+        _overlay.Opacity = 0; // Begin puts it back; the window is click-through meanwhile
+        _origin = new Point(pt.X, pt.Y);
+        PlacePanel();
+        _warming = true;
+        try { Update(); } finally { _warming = false; }
+        var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        done.Tick += (_, _) => { done.Stop(); if (_state == State.Idle) _overlay.Dismiss(false); };
+        done.Start();
+        DbgWrite($"{DateTime.Now:HH:mm:ss} warm-up frame={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:F0}ms"); // [DEBUG-7c1e]
+    }
+
+    // [DEBUG-7c1e] Session timing log: %APPDATA%\Windmill	iming.log, recreated at every launch. Remove when the slow-activation bug is found.
+    long _dbgT0, _dbgT1, _dbgLast = Stopwatch.GetTimestamp();
+    static readonly string DbgPath = System.IO.Path.Combine(Settings.Directory, "timing.log");
+    static bool _dbgStarted;
+    void DbgLog()
+    {
+        var t2 = Stopwatch.GetTimestamp();
+        double ms(long a, long b) => (b - a) * 1000.0 / Stopwatch.Frequency;
+        var line = $"{DateTime.Now:HH:mm:ss} idleSinceLast={ms(_dbgLast, _dbgT0) / 1000:F0}s down->hold={ms(_dbgT0, _dbgT1):F0}ms hold->frame={ms(_dbgT1, t2):F0}ms total={ms(_dbgT0, t2):F0}ms ws={Environment.WorkingSet >> 20}MB{Environment.NewLine}";
+        DbgWrite(line);
+        _dbgLast = t2; _dbgT0 = 0;
+    }
+    static void DbgWrite(string line)
+    {
+        try
+        {
+            if (!_dbgStarted) { _dbgStarted = true; System.IO.File.WriteAllText(DbgPath, $"session start {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}"); }
+            System.IO.File.AppendAllText(DbgPath, line.TrimEnd() + Environment.NewLine);
+        }
+        catch (System.IO.IOException) { }
     }
 
     int PickRadial(Layout layout, Native.POINT pt)

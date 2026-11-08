@@ -49,7 +49,20 @@ internal sealed class Settings
     /// <summary>Native style: leave Windows' Snap Assist open after a snap instead of closing it.</summary>
     public bool ShowSnapAssist { get; set; } = false;
 
+    /// <summary>Snap menu: list PowerToys FancyZones layouts after the built-in ones.</summary>
     public bool IncludeFancyZones { get; set; } = true;
+
+    /// <summary>Snap menu: list the layouts drawn in the layout editor.</summary>
+    public bool SnapCustomLayouts { get; set; } = true;
+
+    /// <summary>Auto-arrange: offer the editor's layouts when that many windows are picked.</summary>
+    public bool ArrangeCustomLayouts { get; set; } = true;
+
+    /// <summary>Auto-arrange: offer FancyZones layouts that have as many zones as windows picked.</summary>
+    public bool ArrangeFancyZones { get; set; } = false;
+
+    /// <summary>Layout editor: save every change straight away instead of waiting for Save.</summary>
+    public bool ArrangeEditorAutoSave { get; set; } = false;
 
     /// <summary>While komorebi is running, snap windows it tiles by sending it commands instead of moving them.</summary>
     public bool KomorebiIntegration { get; set; } = true;
@@ -72,6 +85,26 @@ internal sealed class Settings
         var temp = FilePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(this, Json));
         File.Move(temp, FilePath, overwrite: true);
+    }
+
+    /// <summary>
+    /// The saved settings, or false if the file exists but couldn't be read (locked, hand-edited badly). Use this
+    /// before changing one setting and saving, so an unreadable file isn't overwritten with defaults.
+    /// </summary>
+    public static bool TryLoad(out Settings settings)
+    {
+        try
+        {
+            settings = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings()
+                : new Settings();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            settings = new Settings();
+            return false;
+        }
     }
 
     public static Settings Load()

@@ -50,6 +50,12 @@ internal static class Layouts
     {
         var list = new List<Layout> { Radial() };
         list.AddRange(BuiltIn());
+        if (settings.SnapCustomLayouts)
+            list.AddRange(ArrangeStore.All.Select((n, i) => new Layout
+        {
+            Name = ArrangeStore.DisplayName(n, i),
+            Zones = ArrangeStore.Slots(n).Select(r => new Zone(r)).ToList(),
+        }));
         if (settings.IncludeFancyZones)
             list.AddRange(FancyZones.Load());
         return list;

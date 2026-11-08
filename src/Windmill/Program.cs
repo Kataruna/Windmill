@@ -21,6 +21,18 @@ internal static class Program
         AppContext.SetSwitch("Switch.System.Windows.Input.Stylus.DisableStylusAndTouchSupport", true);
 
         var app = new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+        // A stray error in a queued callback (a window that vanished mid-snap, komorebi answering oddly) must not end
+        // the process: the keyboard hook, and with it every shortcut, would go too. Logged, and Windmill carries on.
+        app.DispatcherUnhandledException += (_, e) =>
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(Settings.Directory, "error.log"),
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {e.Exception}{Environment.NewLine}");
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+            e.Handled = true;
+        };
 
         Controller controller;
         try

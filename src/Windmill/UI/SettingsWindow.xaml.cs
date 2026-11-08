@@ -51,11 +51,14 @@ public partial class SettingsWindow : Window
         SnapAssistBox.IsChecked = s.ShowSnapAssist;
         SnapAssistBox.Checked += OnSnapAssistChecked; // after loading, so the saved value doesn't trigger the warning
         FancyZonesBox.IsChecked = s.IncludeFancyZones;
+        SnapCustomBox.IsChecked = s.SnapCustomLayouts;
+        ArrangeCustomBox.IsChecked = s.ArrangeCustomLayouts;
+        ArrangeFancyZonesBox.IsChecked = s.ArrangeFancyZones;
         KomorebiBox.IsChecked = s.KomorebiIntegration;
         StartupBox.IsChecked = Startup.IsEnabled;
         UpdatesBox.IsChecked = s.CheckForUpdates;
         UpdatesCaption.Text = $"Get a notification when a new version is out. This is version {Updater.Current}.";
-        LayoutsCaption.Text = controller.LayoutSummary;
+        LayoutsCaption.Text = controller.LayoutSummary + ". Built-in layouts are always there.";
 
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewKeyUp += OnPreviewKeyUp;
@@ -199,6 +202,10 @@ public partial class SettingsWindow : Window
             SnapStyle = (SnapStyle)Math.Max(0, SnapModeBox.SelectedIndex),
             ShowSnapAssist = SnapAssistBox.IsChecked == true,
             IncludeFancyZones = FancyZonesBox.IsChecked == true,
+            SnapCustomLayouts = SnapCustomBox.IsChecked == true,
+            ArrangeCustomLayouts = ArrangeCustomBox.IsChecked == true,
+            ArrangeFancyZones = ArrangeFancyZonesBox.IsChecked == true,
+            ArrangeEditorAutoSave = Settings.Load().ArrangeEditorAutoSave, // owned by the layout editor
             KomorebiIntegration = KomorebiBox.IsChecked == true,
             CheckForUpdates = UpdatesBox.IsChecked == true,
         };
@@ -216,9 +223,11 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        LayoutsCaption.Text = _controller.LayoutSummary;
+        LayoutsCaption.Text = _controller.LayoutSummary + ". Built-in layouts are always there.";
         StatusText.Text = "Saved";
     }
+
+    void OnEditArrangeLayouts(object sender, RoutedEventArgs e) => new LayoutEditorWindow { Owner = this }.ShowDialog();
 
     void OnClose(object sender, RoutedEventArgs e) => Close();
 }

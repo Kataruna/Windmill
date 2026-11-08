@@ -466,7 +466,7 @@ internal sealed class OverlayWindow : Window
                 }
 
                 // Preview slots glide to their new shape as windows are added or removed.
-                var slots = Arranger.Slots(ar.Picked.Count, ar.Portrait);
+                var slots = Arranger.Slots(ar.Picked.Count, ar.Portrait, ar.Variant);
                 for (int i = 0; i < _slot.Length; i++)
                 {
                     if (i < slots.Count)
@@ -747,7 +747,9 @@ internal sealed class OverlayWindow : Window
             }
 
             var title = new Point(centre.X, ar.Map.Bottom + 18 * s);
-            DrawPill(dc, $"Arrange   {ar.Picked.Count}/{Arranger.MaxWindows}", title, 15 * s, s);
+            int vn = Arranger.VariantCount(ar.Picked.Count);
+            DrawPill(dc, $"Arrange   {ar.Picked.Count}/{Arranger.MaxWindows}" +
+                (vn > 1 ? $"   ·   Layout {ar.Variant % vn + 1}/{vn}" : ""), title, 15 * s, s);
 
             bool full = ar.Picked.Count >= Arranger.MaxWindows;
             var cardBg = Color.FromArgb(230, 32, 32, 38);
@@ -815,9 +817,16 @@ internal sealed class OverlayWindow : Window
             dc.Pop();
 
             dc.PushOpacity(EaseOutCubic(Entrance(2)));
-            DrawPill(dc, "Click: pick in order (first gets the most space)    Esc: cancel    " +
+            DrawPill(dc, "Click: pick in order (first gets the most space)    Scroll: layout    Esc: cancel    " +
                     (st.Toggle ? "Enter or shortcut: arrange" : "release: arrange"),
                 new Point(centre.X, ar.Grid.Bottom + 20 * s), 12 * s, s);
+
+            // Close button, bottom middle; clicking or tapping it cancels.
+            var cb = ar.Close;
+            dc.DrawRoundedRectangle(Brush(ar.CloseHot ? Color.FromArgb(235, 200, 60, 60) : Color.FromArgb(220, 32, 32, 38)),
+                Stroke(Color.FromArgb(50, 255, 255, 255), 1 * s), cb, cb.Height / 2, cb.Height / 2);
+            var ct = Cached("Close", 13 * s, Colors.White, s);
+            dc.DrawText(ct, new Point(cb.X + (cb.Width - ct.Width) / 2, cb.Y + (cb.Height - ct.Height) / 2));
             dc.Pop();
         }
 

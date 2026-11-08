@@ -33,6 +33,9 @@ internal sealed class ArrangeView
     public bool Portrait;
     public Rect Map;    // miniature preview of the arrangement
     public Rect Grid;   // bounding box of the cards
+    public Rect Close;  // close button under the hint, for when Esc is out of reach
+    public bool CloseHot; // the pointer is over it
+    public int Variant; // which arrangement of the picked windows (scroll to change)
 
     public int HitTest(Point p) => Cards.FindIndex(c => c.Bounds.Contains(p));
 }
@@ -221,37 +224,110 @@ internal static class Arranger
             Map = new Rect(work.X + (work.Width - mapW) / 2, top, mapW, mapH),
             Grid = new Rect(work.X + (work.Width - gridW) / 2, top + mapH + header, gridW, gridH),
         };
+        view.Close = new Rect(work.X + (work.Width - 96 * dpi) / 2, view.Grid.Bottom + 44 * dpi, 96 * dpi, 28 * dpi);
         for (int i = 0; i < cards.Count; i++)
             cards[i].Bounds = new Rect(view.Grid.X + i % cols * (cw + gap), view.Grid.Y + i / cols * (ch + gap), cw, ch);
         return view;
     }
 
-    /// <summary>Where each of <paramref name="n"/> windows goes; the first slot is always the largest.</summary>
-    public static IReadOnlyList<NRect> Slots(int n, bool portrait)
+    static NRect R(double x, double y, double w, double h) => new(x, y, w, h);
+
+    static bool _custom = true;
+    static Dictionary<int, List<NRect[]>> _fancyZones = new(); // by zone count
+
+    /// <summary>Which extra layouts auto-arrange offers. Called whenever settings are (re)loaded.</summary>
+    public static void Configure(Settings settings)
     {
-        NRect[] slots = n switch
+        ClearVariants();
+        _custom = settings.ArrangeCustomLayouts;
+        // FancyZones zones have no pick order, so the biggest zone goes to the first pick, then top-left first.
+        _fancyZones = settings.ArrangeFancyZones
+            ? FancyZones.Load()
+                .Where(l => l.Zones.Count is > 0 and <= MaxWindows)
+                .GroupBy(l => l.Zones.Count)
+                .ToDictionary(g => g.Key, g => g.Select(l => l.Zones.Select(z => z.Rect)
+                    .OrderByDescending(r => Math.Round(r.Area, 3)).ThenBy(r => r.Y).ThenBy(r => r.X).ToArray()).ToList())
+            : new();
+    }
+
+    // The open arrange menu asks for these every frame, so they're built once per window count (and orientation)
+    // and kept until the settings or the custom layouts change. UI thread only.
+    static readonly NRect[][]?[] _landscape = new NRect[][]?[MaxWindows + 1], _portrait = new NRect[][]?[MaxWindows + 1];
+
+    static Arranger() => ArrangeStore.Saved += ClearVariants;
+
+    static void ClearVariants()
+    {
+        Array.Clear(_landscape);
+        Array.Clear(_portrait);
+    }
+
+    static NRect[][] Variants(int n, bool portrait = false)
+    {
+        if (n <= 0 || n > MaxWindows) return Array.Empty<NRect[]>();
+        var cache = portrait ? _portrait : _landscape;
+        return cache[n] ??= Build();
+
+        NRect[][] Build()
         {
-            <= 0 => Array.Empty<NRect>(),
-            1 => new NRect[] { new(0, 0, 1, 1) },
-            2 => new NRect[] { new(0, 0, 0.5, 1), new(0.5, 0, 0.5, 1) },
-            3 => new NRect[] { new(0, 0, 0.5, 1), new(0.5, 0, 0.5, 0.5), new(0.5, 0.5, 0.5, 0.5) },
-            4 => new NRect[] { new(0, 0, 0.5, 0.5), new(0.5, 0, 0.5, 0.5), new(0, 0.5, 0.5, 0.5), new(0.5, 0.5, 0.5, 0.5) },
-            5 => new NRect[]
-            {
-                new(0, 0, 0.5, 1),
-                new(0.5, 0, 0.25, 0.5), new(0.75, 0, 0.25, 0.5),
-                new(0.5, 0.5, 0.25, 0.5), new(0.75, 0.5, 0.25, 0.5),
-            },
-            _ => Enumerable.Range(0, 6).Select(i => new NRect(i % 3 / 3.0, i / 3 * 0.5, 1 / 3.0, 0.5)).ToArray(),
-        };
-        // On a portrait screen, stack instead of putting side by side.
-        return portrait ? slots.Select(r => new NRect(r.Y, r.X, r.H, r.W)).ToArray() : slots;
+            var all = BuiltIn[n]
+                .Concat(_custom ? ArrangeStore.For(n) : Array.Empty<NRect[]>())
+                .Concat(_fancyZones.TryGetValue(n, out var fz) ? fz : new List<NRect[]>());
+            // On a portrait screen, stack instead of putting side by side.
+            return portrait ? all.Select(v => v.Select(r => new NRect(r.Y, r.X, r.H, r.W)).ToArray()).ToArray() : all.ToArray();
+        }
+    }
+
+    /// <summary>The built-in arrangements, by window count (index 0 unused).</summary>
+    static readonly NRect[][][] BuiltIn = Enumerable.Range(0, MaxWindows + 1).Select(MakeBuiltIn).ToArray();
+
+    static NRect[][] MakeBuiltIn(int n) => n switch
+    {
+        <= 0 => Array.Empty<NRect[]>(),
+        1 => new[] { new[] { R(0, 0, 1, 1) } },
+        2 => new[]
+        {
+            new[] { R(0, 0, 0.5, 1), R(0.5, 0, 0.5, 1) },
+            new[] { R(0, 0, 1, 0.5), R(0, 0.5, 1, 0.5) },
+        },
+        3 => new[]
+        {
+            new[] { R(0, 0, 0.5, 1), R(0.5, 0, 0.5, 0.5), R(0.5, 0.5, 0.5, 0.5) },
+            new[] { R(0, 0, 1, 0.5), R(0, 0.5, 0.5, 0.5), R(0.5, 0.5, 0.5, 0.5) },
+            new[] { R(0, 0, 1 / 3.0, 1), R(1 / 3.0, 0, 1 / 3.0, 1), R(2 / 3.0, 0, 1 / 3.0, 1) },
+        },
+        4 => new[]
+        {
+            new[] { R(0, 0, 0.5, 0.5), R(0.5, 0, 0.5, 0.5), R(0, 0.5, 0.5, 0.5), R(0.5, 0.5, 0.5, 0.5) },
+            new[] { R(0, 0, 0.5, 1), R(0.5, 0, 0.5, 1 / 3.0), R(0.5, 1 / 3.0, 0.5, 1 / 3.0), R(0.5, 2 / 3.0, 0.5, 1 / 3.0) },
+            Enumerable.Range(0, 4).Select(i => R(i / 4.0, 0, 0.25, 1)).ToArray(),
+        },
+        5 => new[]
+        {
+            new[] { R(0, 0, 0.5, 1), R(0.5, 0, 0.25, 0.5), R(0.75, 0, 0.25, 0.5), R(0.5, 0.5, 0.25, 0.5), R(0.75, 0.5, 0.25, 0.5) },
+            new[] { R(0, 0, 1 / 3.0, 0.5), R(1 / 3.0, 0, 1 / 3.0, 0.5), R(2 / 3.0, 0, 1 / 3.0, 0.5), R(0, 0.5, 0.5, 0.5), R(0.5, 0.5, 0.5, 0.5) },
+        },
+        _ => new[]
+        {
+            Enumerable.Range(0, 6).Select(i => R(i % 3 / 3.0, i / 3 * 0.5, 1 / 3.0, 0.5)).ToArray(),
+            Enumerable.Range(0, 6).Select(i => R(i % 2 * 0.5, i / 2 / 3.0, 0.5, 1 / 3.0)).ToArray(),
+        },
+    };
+
+    /// <summary>How many arrangements there are for <paramref name="n"/> windows.</summary>
+    public static int VariantCount(int n) => Variants(n).Length;
+
+    /// <summary>Where each of <paramref name="n"/> windows goes; the first slot is always the largest.</summary>
+    public static IReadOnlyList<NRect> Slots(int n, bool portrait, int variant = 0)
+    {
+        var all = Variants(n, portrait);
+        return all.Length == 0 ? Array.Empty<NRect>() : all[((variant % all.Length) + all.Length) % all.Length];
     }
 
     /// <param name="remember">Restore each window's size when it is dragged away (Native snap style).</param>
-    public static void Arrange(IReadOnlyList<IntPtr> windows, Native.RECT work, int gap, bool remember)
+    public static void Arrange(IReadOnlyList<IntPtr> windows, Native.RECT work, int gap, bool remember, int variant = 0)
     {
-        var slots = Slots(windows.Count, work.Height > work.Width);
+        var slots = Slots(windows.Count, work.Height > work.Width, variant);
         for (int i = 0; i < windows.Count; i++)
             // Always move and resize: real Windows snap of several windows in a row fights its own Snap Assist.
             WindowSnapper.Place(windows[i], work, new Zone(slots[i], Maximize: windows.Count == 1), gap, remember);
