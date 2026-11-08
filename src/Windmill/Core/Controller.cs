@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -243,7 +242,6 @@ internal sealed class Controller : IDisposable
                     if (_state == State.Idle || _mode != m)
                     {
                         _mode = m;
-                        _dbgT0 = Stopwatch.GetTimestamp(); // [DEBUG-7c1e]
                         _state = State.Pending;
                         _holdTimer.Stop();
                         _holdTimer.Start();
@@ -426,7 +424,6 @@ internal sealed class Controller : IDisposable
         var hwnd = Native.GetForegroundWindow();
         if (!WindowSnapper.IsSnappable(hwnd)) { _state = State.Idle; Block(); return; }
 
-        _dbgT1 = Stopwatch.GetTimestamp(); // [DEBUG-7c1e]
         _target = hwnd;
         // Refresh komorebi's cached running state while the menu is up, so the snap doesn't wait on it.
         if (_settings.KomorebiIntegration) _ = Task.Run(Komorebi.IsRunning);
@@ -685,7 +682,6 @@ internal sealed class Controller : IDisposable
             bool hot = arrange.Close.Contains(new Point(pt.X - mon.Left, pt.Y - mon.Top));
             if (hot != arrange.CloseHot) { arrange.CloseHot = hot; arrange.Revision++; }
         }
-        bool dbgFirst = _dbgT0 != 0; // [DEBUG-7c1e]
         _overlay.Render(new OverlayState
         {
             Layout = layout,
@@ -700,7 +696,6 @@ internal sealed class Controller : IDisposable
             Panel = new Rect(_panel.X - mon.Left, _panel.Y - mon.Top, _panel.Width, _panel.Height),
             Work = new Rect(work.Left - mon.Left, work.Top - mon.Top, work.Width, work.Height),
         });
-        if (dbgFirst) DbgLog(); // [DEBUG-7c1e]
     }
 
     bool _warming;
@@ -713,7 +708,6 @@ internal sealed class Controller : IDisposable
     internal void Warm()
     {
         if (_state != State.Idle) return;
-        var t0 = Stopwatch.GetTimestamp();
         Native.GetCursorPos(out var pt);
         SetMonitor(Native.MonitorFromPoint(pt, Native.MONITOR_DEFAULTTONEAREST));
         _overlay.Opacity = 0; // Begin puts it back; the window is click-through meanwhile
@@ -724,29 +718,6 @@ internal sealed class Controller : IDisposable
         var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         done.Tick += (_, _) => { done.Stop(); if (_state == State.Idle) _overlay.Dismiss(false); };
         done.Start();
-        DbgWrite($"{DateTime.Now:HH:mm:ss} warm-up frame={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:F0}ms"); // [DEBUG-7c1e]
-    }
-
-    // [DEBUG-7c1e] Session timing log: %APPDATA%\Windmill	iming.log, recreated at every launch. Remove when the slow-activation bug is found.
-    long _dbgT0, _dbgT1, _dbgLast = Stopwatch.GetTimestamp();
-    static readonly string DbgPath = System.IO.Path.Combine(Settings.Directory, "timing.log");
-    static bool _dbgStarted;
-    void DbgLog()
-    {
-        var t2 = Stopwatch.GetTimestamp();
-        double ms(long a, long b) => (b - a) * 1000.0 / Stopwatch.Frequency;
-        var line = $"{DateTime.Now:HH:mm:ss} idleSinceLast={ms(_dbgLast, _dbgT0) / 1000:F0}s down->hold={ms(_dbgT0, _dbgT1):F0}ms hold->frame={ms(_dbgT1, t2):F0}ms total={ms(_dbgT0, t2):F0}ms ws={Environment.WorkingSet >> 20}MB{Environment.NewLine}";
-        DbgWrite(line);
-        _dbgLast = t2; _dbgT0 = 0;
-    }
-    static void DbgWrite(string line)
-    {
-        try
-        {
-            if (!_dbgStarted) { _dbgStarted = true; System.IO.File.WriteAllText(DbgPath, $"session start {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}"); }
-            System.IO.File.AppendAllText(DbgPath, line.TrimEnd() + Environment.NewLine);
-        }
-        catch (System.IO.IOException) { }
     }
 
     int PickRadial(Layout layout, Native.POINT pt)
